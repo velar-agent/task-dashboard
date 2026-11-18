@@ -1,0 +1,2 @@
+CRON_TZ=Asia/Seoul
+0 0 * * * collector /workspace/task-dashboard-dev/vm/promote.sh

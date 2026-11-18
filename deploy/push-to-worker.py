@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""box의 작업 스냅샷이 바뀌면 Worker에 전송한다."""
+"""box의 작업 스냅샷이 바뀌면 Worker 또는 구글 VM dev/prod 에 전송한다.
+
+google-dev/google-prod 대상은 plain HTTP 전송을 하며 Bearer 키가 평문으로 네트워크에 노출된다.
+"""
 
 import argparse
 import fcntl
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -13,11 +17,14 @@ from http.client import HTTPException
 from pathlib import Path
 from time import sleep
 from urllib.error import HTTPError
+from urllib.parse import urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 
 STATE_FILE = Path(f"/tmp/task-push-{os.getuid()}.sha")
 DEV_STATE_FILE = Path(f"/tmp/task-push-dev-{os.getuid()}.sha")
+GOOGLE_DEV_STATE_FILE = Path(f"/tmp/task-push-google-dev-{os.getuid()}.sha")
+GOOGLE_PROD_STATE_FILE = Path(f"/tmp/task-push-google-prod-{os.getuid()}.sha")
 
 
 class PushError(Exception):
@@ -35,11 +42,29 @@ def request_body(request, operation):
         raise PushError(f"{operation} ({type(error).__name__})") from None
 
 
+DEFAULT_URLS = {
+    "prod": "https://task-dashboard.velar-agent.workers.dev",
+    "dev": "https://task-dashboard-dev.velar-agent.workers.dev",
+    "google-dev": "http://task-dashboard-dev.velar-agent.duckdns.org",
+    "google-prod": "http://task-dashboard.velar-agent.duckdns.org",
+}
+
+
 def push_once(force, target="prod"):
-    suffix = "-dev" if target == "dev" else ""
-    state_file = DEV_STATE_FILE if target == "dev" else STATE_FILE
+    if target == "dev":
+        suffix = "-dev"
+        state_file = DEV_STATE_FILE
+    elif target == "google-dev":
+        suffix = "-google-dev"
+        state_file = GOOGLE_DEV_STATE_FILE
+    elif target == "google-prod":
+        suffix = "-google-prod"
+        state_file = GOOGLE_PROD_STATE_FILE
+    else:
+        suffix = ""
+        state_file = STATE_FILE
     source = os.environ.get("SOURCE_URL", "http://127.0.0.1:8787/api/tasks")
-    worker = os.environ.get("WORKER_URL", f"https://task-dashboard{suffix}.velar-agent.workers.dev")
+    worker = os.environ.get("WORKER_URL", DEFAULT_URLS.get(target, DEFAULT_URLS["prod"]))
 
     # 두 프로세스가 겹쳐도 소스 조회, PUT, 해시 기록 순서가 뒤집히지 않게 한다.
     with state_file.with_suffix(".lock").open("a") as lock:
@@ -63,11 +88,33 @@ def push_once(force, target="prod"):
             raise PushError(f"KEY_FILE 읽기 실패 ({type(error).__name__})") from None
         if not key or not key.isprintable() or " " in key:
             raise PushError("KEY_FILE에 한 줄의 Bearer 키가 필요합니다.")
-        upload = Request(worker.rstrip("/") + "/api/ingest", method="PUT", data=body, headers={
+        headers = {
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
             "User-Agent": "task-dashboard-push/1.0",
-        })
+        }
+        connect_ip = os.environ.get("CONNECT_IP", "").strip()
+        if connect_ip:
+            try:
+                ip = ipaddress.ip_address(connect_ip)
+            except ValueError:
+                raise PushError("CONNECT_IP 는 IP 주소여야 합니다") from None
+            parsed = urlparse(worker)
+            original_host = parsed.hostname
+            if original_host:
+                if isinstance(ip, ipaddress.IPv6Address):
+                    ip_host = f"[{ip}]"
+                else:
+                    ip_host = str(ip)
+                new_netloc = ip_host
+                if parsed.port:
+                    new_netloc = f"{ip_host}:{parsed.port}"
+                worker = urlunparse(parsed._replace(netloc=new_netloc))
+                if parsed.port and parsed.port not in (80, 443):
+                    headers["Host"] = f"{original_host}:{parsed.port}"
+                else:
+                    headers["Host"] = original_host
+        upload = Request(worker.rstrip("/") + "/api/ingest", method="PUT", data=body, headers=headers)
         request_body(upload, "Worker 전송")
         with tempfile.TemporaryDirectory(dir=state_file.parent) as directory:
             staged = Path(directory) / state_file.name
@@ -84,7 +131,7 @@ def positive_seconds(value):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--target", choices=("prod", "dev"), default="prod", help="전송 대상 (기본 prod).")
+    parser.add_argument("--target", choices=("prod", "dev", "google-dev", "google-prod"), default="prod", help="전송 대상 (기본 prod).")
     parser.add_argument("--loop", nargs="?", const=15, type=positive_seconds, metavar="초",
                         help="지정한 간격으로 반복합니다 (기본 15초).")
     parser.add_argument("--force", action="store_true", help="같은 작업도 다시 전송합니다.")

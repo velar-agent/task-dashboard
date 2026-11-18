@@ -1,0 +1,30 @@
+[Unit]
+Description=Task Dashboard Prod (구글 VM, duckdns)
+After=network.target
+
+[Service]
+Type=simple
+User=collector
+WorkingDirectory=/workspace/task-dashboard
+EnvironmentFile=/home/collector/.config/task-dashboard/env
+Environment=HOST=127.0.0.1
+Environment=PORT=8791
+Environment=DATA_FILE=/var/lib/task-dashboard/snapshot.json
+Environment=PYTHONDONTWRITEBYTECODE=1
+StateDirectory=task-dashboard
+ExecStart=/usr/bin/python3 vm/server.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

@@ -155,3 +155,145 @@ usage-dashboard 의 VM 방식과 같아요: GCE VM(`ssh gce-collector`)의 `/wor
 - 상태 파일은 repo 에 없어요(`.gitignore`). box 의 `/workspace/task-status/tasks.jsonl` 이 원본이고, `deploy/sync-to-vm.sh --loop 15` 가 box 에서 15초마다 바뀐 때만 VM 의 같은 경로로 복사해요(VM 에서 `mv` 로 원자적 교체).
 - 터널 URL: `ssh gce-collector 'journalctl -u cloudflared-task-dashboard -o cat | grep -o "https://[a-z0-9-]*\.trycloudflare.com" | tail -1'` (quick tunnel 이라 재시작하면 URL 이 바뀌어요)
 - 로그: `journalctl -u task-dashboard`
+
+## 구글 VM(duckdns) dev+prod
+
+구글 VM(Ubuntu 24.04, python3.12, 메모리 1GB, rg 없음)에서 task-dashboard를 nginx 뒤에 두고 dev와 prod 두 서비스를 `http://...` (포트 80, HTTPS 없음)로 서비스합니다. VM 서버는 파이썬 표준 라이브러리만으로 기존 Worker와 같은 API를 제공합니다. nginx는 `/etc/nginx/sites-available/task-dashboard` 한 파일에 `server_name`이 다른 server 블록 두 개를 두고, 둘 다 80번으로 받아 `127.0.0.1:8790`(dev)과 `127.0.0.1:8791`(prod)로 프록시합니다. `default_server`는 쓰지 않으며 `usage-dashboard` 파일은 참조하지 않습니다.
+
+### 구조와 포트
+
+- `vm/server.py`: 표준 라이브러리 전용 서버. 같은 저장소의 `server.py`에서 `PAGE`를 import 해 동일 화면을 서빙하며 `worker/src/index.js`와 같은 동작·JSON 모양·상태코드·메시지를 냅니다. `ThreadingHTTPServer`로 `HOST`(기본 `127.0.0.1`) `PORT`(유닛에서 주입)에 뜨고, 스냅샷은 `DATA_FILE` 한 파일에 임시파일+`os.replace`로 원자 저장합니다.
+- `vm/task-dashboard-dev.service`: dev 유닛(`User=collector`, `WorkingDirectory=/workspace/task-dashboard-dev`). `EnvironmentFile=/home/collector/.config/task-dashboard-dev/env`로 `INGEST_KEY`를 읽고 `HOST=127.0.0.1` `PORT=8790` `DATA_FILE=/var/lib/task-dashboard-dev/snapshot.json` `PYTHONDONTWRITEBYTECODE=1`, `StateDirectory=task-dashboard-dev`, `ExecStart=/usr/bin/python3 vm/server.py`, `Restart=always`로 재부팅 후에도 자동 시작합니다.
+- `vm/task-dashboard.service`: prod 유닛(`User=collector`, `WorkingDirectory=/workspace/task-dashboard`). `EnvironmentFile=/home/collector/.config/task-dashboard/env`, `HOST=127.0.0.1` `PORT=8791` `DATA_FILE=/var/lib/task-dashboard/snapshot.json` `PYTHONDONTWRITEBYTECODE=1`, `StateDirectory=task-dashboard`, `ExecStart=/usr/bin/python3 vm/server.py`로 dev와 경로·환경파일·`StateDirectory`·데이터 파일·포트를 분리합니다. 두 서비스는 서로 다른 `INGEST_KEY`, 별도 코드 체크아웃, 별도 데이터 파일을 씁니다. `8787`/`8788`은 쓰지 않습니다.
+- `vm/nginx-task-dashboard.conf`: `server_name task-dashboard-dev.velar-agent.duckdns.org`와 `server_name task-dashboard.velar-agent.duckdns.org` 두 server 블록. 둘 다 `listen 80;`, `listen [::]:80;`, `client_max_body_size 1m;`, `proxy_set_header Host $host;`, `proxy_set_header X-Forwarded-For $remote_addr;`, `proxy_set_header X-Forwarded-Proto http;`, `proxy_read_timeout 30s;`를 가지며 각각 `proxy_pass http://127.0.0.1:8790;`과 `proxy_pass http://127.0.0.1:8791;`로 보냅니다. `default_server`는 없습니다.
+- `vm/install.sh`: collector로 실행하는 idempotent 설치. 인자 `dev` 또는 `prod`(필수)를 받아 스크립트가 있는 저장소 루트가 기대 경로와 맞는지 확인한 뒤 해당 유닛만 설치/재시작하고, nginx 공유 파일 하나를 설치합니다. sudo는 유닛과 nginx 설치에만 씁니다.
+- `vm/deploy.sh`: box에서 실행하는 배포 헬퍼.
+- `vm/promote.sh`: VM의 collector가 cron으로 실행하는 dev→prod 승격 러너.
+- `vm/cron/task-dashboard-nightly`: VM에 설치하는 cron 파일.
+
+| 항목 | dev | prod |
+| --- | --- | --- |
+| 공개 주소 | `http://task-dashboard-dev.velar-agent.duckdns.org` (80, HTTPS 없음) | `http://task-dashboard.velar-agent.duckdns.org` (80, HTTPS 없음) |
+| VM 내 서버 | `127.0.0.1:8790` | `127.0.0.1:8791` |
+| systemd 유닛 | `task-dashboard-dev` | `task-dashboard` |
+| 체크아웃 | `/workspace/task-dashboard-dev` | `/workspace/task-dashboard` |
+| 데이터 파일 | `/var/lib/task-dashboard-dev/snapshot.json` | `/var/lib/task-dashboard/snapshot.json` |
+| VM 키 파일 | `~/.config/task-dashboard-dev/env` (`INGEST_KEY=...` 한 줄, 권한 `600`) | `~/.config/task-dashboard/env` (`INGEST_KEY=...` 한 줄, 권한 `600`) |
+| box 키 파일 | `~/.config/task-dashboard/ingest-key-google-dev` | `~/.config/task-dashboard/ingest-key-google-prod` |
+| box 상태 해시 | `/tmp/task-push-google-dev-$UID.sha` | `/tmp/task-push-google-prod-$UID.sha` |
+
+### 키와 설치
+
+키는 박스에서 직접 VM에 설치합니다. 설치 스크립트는 환경 파일이 없으면 만들지 않고 안내한 뒤 실패합니다.
+
+```sh
+# VM에서 (collector로)
+install -d -m 700 /home/collector/.config/task-dashboard-dev
+printf 'INGEST_KEY=%s\n' '여기에-키를-입력' > /home/collector/.config/task-dashboard-dev/env
+chmod 600 /home/collector/.config/task-dashboard-dev/env
+install -d -m 700 /home/collector/.config/task-dashboard
+printf 'INGEST_KEY=%s\n' '여기에-키를-입력' > /home/collector/.config/task-dashboard/env
+chmod 600 /home/collector/.config/task-dashboard/env
+
+cd /workspace/task-dashboard-dev && ./vm/install.sh dev
+cd /workspace/task-dashboard && ./vm/install.sh prod
+```
+
+`vm/install.sh <dev|prod>`는 체크아웃(`dev`→`/workspace/task-dashboard-dev`, `prod`→`/workspace/task-dashboard`)과 일치할 때 해당 유닛만 `/etc/systemd/system/<unit>.service`에 설치하고 `daemon-reload`, `enable --now`, 재시작합니다. nginx는 `/etc/nginx/sites-available/task-dashboard`로 복사해 `/etc/nginx/sites-enabled/task-dashboard` 심볼릭 링크를 만든 뒤 `sudo nginx -t`를 통과해야만 `reload nginx`합니다. 실패하면 링크를 제거하고 비0으로 끝납니다. 다른 nginx 사이트 파일은 건드리지 않습니다.
+
+재시작과 로그:
+
+```sh
+sudo systemctl restart task-dashboard-dev
+systemctl status task-dashboard-dev
+journalctl -u task-dashboard-dev -n 40
+sudo systemctl restart task-dashboard
+systemctl status task-dashboard
+journalctl -u task-dashboard -n 40
+sudo nginx -t && sudo systemctl reload nginx
+journalctl -u nginx -n 40
+curl -i http://127.0.0.1:8790/healthz
+curl -i http://127.0.0.1:8791/healthz
+```
+
+### 배포 헬퍼 (`vm/deploy.sh`)
+
+box에서 실행하며 `dev` 또는 `prod`를 받습니다. `ssh gce-collector`로 해당 체크아웃을 `git pull --ff-only`한 뒤 `vm/install.sh <env>`를 실행합니다. 체크아웃이 없으면 dev는 `git clone git@github.com:velar-agent/task-dashboard.git`으로 생성합니다.
+
+```sh
+./vm/deploy.sh dev    # VM의 /workspace/task-dashboard-dev 갱신 + task-dashboard-dev 재시작
+./vm/deploy.sh prod   # VM의 /workspace/task-dashboard 갱신 + task-dashboard 재시작 (직접 배포도 가능하지만 평소엔 자정 승격이 담당)
+```
+
+### 자정 승격 (`vm/promote.sh`)
+
+VM의 `collector`가 chron으로 실행하며, 비밀 값을 읽거나 출력하지 않습니다. `TZ=Asia/Seoul`이며 상태 디렉터리 `~/.local/state/task-dashboard-deploy`에 일자별 로그(60일 보관)와 `last-run.json`을 남깁니다. `flock` 락으로 겹침을 막습니다. `dev`는 `/workspace/task-dashboard-dev`, `prod`는 `/workspace/task-dashboard`입니다. `SYSTEMCTL`, `HEALTH_CMD` 환경변수로 systemctl·curl 호출을 가짜 명령으로 대체할 수 있게 설계했습니다.
+
+순서:
+
+1. DEV에서 `git fetch origin`, 브랜치 `main`·깨끗한 작업 트리(untracked 제외 무관 시 명시, `git status --porcelain --untracked-files=no`로만 검사)·`HEAD`가 `origin/main`과 같은지 확인합니다. 다르면 종료 3(`dev≠main`)이며 아무것도 올리지 않습니다.
+2. 점검: `python3 -m unittest`(DEV), dev 서비스(`127.0.0.1:8790`) `/healthz` 200·`/` 200 HTML·`/api/tasks` 200·인증 없는 `PUT /api/ingest` 401, 그리고 dev가 실제로 서비스 중인 페이지가 DEV의 `server.PAGE`와 같은지 확인합니다. 실패는 종료 1입니다.
+3. PROD의 `HEAD`가 DEV `HEAD`와 같으면 건너뜀(0, `--force`면 계속).
+4. PROD 사전 점검: 브랜치 `main`·깨끗함(untracked 제외), 기존 `HEAD(prev)` 기록, DEV `HEAD`가 PROD `HEAD`의 후손(fast-forward 가능)인지 확인합니다. 아니면 종료 7(수동 확인).
+5. PROD에서 `git fetch origin` 후 `git merge --ff-only <DEV HEAD>`, `sudo systemctl restart task-dashboard`, 점검(`127.0.0.1:8791` 같은 항목, 재시도 최대 약 15초; 페이지 비교 포함).
+6. 실패 시 `git reset --hard <prev>`, 재시작, 다시 점검: 통과하면 종료 5, 아니면 종료 6. 성공 0.
+
+```sh
+/workspace/task-dashboard-dev/vm/promote.sh
+/workspace/task-dashboard-dev/vm/promote.sh --dry-run   # (4)까지만 수행하고 (5)(6)은 "예정"만 출력
+/workspace/task-dashboard-dev/vm/promote.sh --force     # HEAD가 같아도 계속 진행
+```
+
+| 종료 코드 | 의미 |
+| --- | --- |
+| 0 | 성공/변경없음 |
+| 1 | 점검·git 실패 |
+| 3 | dev≠main |
+| 5 | 승격 후 점검 실패→롤백됨 |
+| 6 | 롤백 실패(수동) |
+| 7 | fast-forward 불가 등 안전 점검 거부 |
+| 9 | 이미 실행 중 |
+| 10 | 사용법 |
+
+### cron
+
+`vm/cron/task-dashboard-nightly`는 VM의 `/etc/cron.d/task-dashboard-nightly`로 설치합니다. `usage-dashboard`의 cron과 별개 파일이며 락과 상태 디렉터리가 독립적입니다.
+
+```
+CRON_TZ=Asia/Seoul
+0 0 * * * collector /workspace/task-dashboard-dev/vm/promote.sh
+```
+
+VM에서 확인:
+
+```sh
+cat /etc/cron.d/task-dashboard-nightly
+state="$HOME/.local/state/task-dashboard-deploy"
+cat "$state/last-run.json"
+tail -n 40 "$state/$(TZ=Asia/Seoul date +%F).log"
+```
+
+### 푸시
+
+box에서 계속 동기화하려면 푸시 스크립트의 google-dev/google-prod 대상을 씁니다. 같은 `tasks`면 전송하지 않습니다. 기존 `prod`/`dev` 대상도 유지합니다.
+
+```sh
+./deploy/push-to-worker.py --target google-dev --loop 15
+./deploy/push-to-worker.py --target google-prod --loop 15
+```
+
+박스 DNS가 가짜 `198.18.x`를 돌려주면 `CONNECT_IP`에 실제 VM IP를 넣어 그 IP로 접속하고 `Host` 헤더는 원래 호스트로 보냅니다.
+
+```sh
+CONNECT_IP=203.0.113.10 ./deploy/push-to-worker.py --target google-dev --loop 15
+CONNECT_IP=203.0.113.10 ./deploy/push-to-worker.py --target google-prod --loop 15
+# 또는 WORKER_URL 재지정:
+# CONNECT_IP=203.0.113.10 WORKER_URL=http://task-dashboard-dev.velar-agent.duckdns.org \
+#   ./deploy/push-to-worker.py --target google-dev --loop 15
+# CONNECT_IP=203.0.113.10 WORKER_URL=http://task-dashboard.velar-agent.duckdns.org \
+#   ./deploy/push-to-worker.py --target google-prod --loop 15
+```
+
+### HTTPS 없음 / 평문 HTTP 키 경고
+
+이 환경은 HTTPS가 없고 평문 HTTP(`http://...`)로 Bearer 키를 전송합니다. 네트워크 감청 시 키가 노출될 수 있습니다. VM의 nginx 80번과 box의 푸시 구간 모두 암호화되지 않습니다. 공용 네트워크에서는 쓰지 마세요.

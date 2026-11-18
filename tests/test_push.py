@@ -68,6 +68,10 @@ class PushTests(unittest.TestCase):
         stack.enter_context(patch.object(push, "STATE_FILE", self.state))
         self.dev_state = root / "dev.sha"
         stack.enter_context(patch.object(push, "DEV_STATE_FILE", self.dev_state))
+        self.google_dev_state = root / "google-dev.sha"
+        stack.enter_context(patch.object(push, "GOOGLE_DEV_STATE_FILE", self.google_dev_state))
+        self.google_prod_state = root / "google-prod.sha"
+        stack.enter_context(patch.object(push, "GOOGLE_PROD_STATE_FILE", self.google_prod_state))
         self.key = "unit-test-ingest-key"
         key_file = root / "key"
         key_file.write_text(self.key + "\n", encoding="ascii")
@@ -86,6 +90,7 @@ class PushTests(unittest.TestCase):
             "WORKER_URL": f"http://127.0.0.1:{self.worker.server_port}/",
             "KEY_FILE": str(key_file),
             "no_proxy": "127.0.0.1",
+            "CONNECT_IP": "",
         }))
         self.stdout = stack.enter_context(redirect_stdout(io.StringIO()))
         self.stderr = stack.enter_context(redirect_stderr(io.StringIO()))
@@ -166,6 +171,217 @@ class PushTests(unittest.TestCase):
         self.assertEqual(body, self.source.snapshot)
         self.assertTrue(self.dev_state.exists())
         self.assertFalse(self.state.exists())
+
+    def test_google_dev_uses_own_default_url_key_hash_and_lock(self):
+        config = self.state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-google-dev").write_text("google-fixture", encoding="ascii")
+        (config / "ingest-key-dev").write_text("dev-fixture", encoding="ascii")
+        (config / "ingest-key").write_text("prod-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.state.parent), "CONNECT_IP": ""}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                self.assertEqual(push.main(["--target", "google-dev"]), 0)
+                upload = http.call_args.args[0]
+                self.assertEqual(
+                    upload.full_url,
+                    "http://task-dashboard-dev.velar-agent.duckdns.org/api/ingest",
+                )
+                self.assertEqual(upload.get_header("Authorization"), "Bearer google-fixture")
+                self.assertEqual(upload.data, body)
+                self.assertRegex(self.google_dev_state.read_text().strip(), r"^[0-9a-f]{64}$")
+                self.assertTrue(self.google_dev_state.with_suffix(".lock").is_file())
+                self.assertFalse(self.state.exists())
+                self.assertFalse(self.dev_state.exists())
+                http.reset_mock()
+                self.assertEqual(push.main(["--target", "google-dev"]), 0)
+                self.assertEqual(http.call_count, 1)  # 소스 조회만 수행
+
+    def test_google_dev_honors_url_and_key_overrides(self):
+        self.assertEqual(push.main(["--target", "google-dev"]), 0)
+        (_, headers, body), = self.worker.puts
+        self.assertEqual(headers["Authorization"], "Bearer " + self.key)
+        self.assertEqual(body, self.source.snapshot)
+        self.assertTrue(self.google_dev_state.exists())
+        self.assertFalse(self.state.exists())
+        self.assertFalse(self.dev_state.exists())
+
+    def test_google_dev_connect_ip_rewrites_host(self):
+        config = self.state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-google-dev").write_text("google-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.state.parent), "CONNECT_IP": "192.0.2.99"}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                self.assertEqual(push.main(["--target", "google-dev"]), 0)
+                upload = http.call_args.args[0]
+                self.assertEqual(upload.full_url, "http://192.0.2.99/api/ingest")
+                self.assertEqual(
+                    upload.get_header("Host"),
+                    "task-dashboard-dev.velar-agent.duckdns.org",
+                )
+                self.assertEqual(upload.get_header("Authorization"), "Bearer google-fixture")
+
+    def test_google_dev_connect_ip_live_host_header(self):
+        worker_url = (
+            f"http://task-dashboard-dev.velar-agent.duckdns.org:{self.worker.server_port}/"
+        )
+        with patch.dict(os.environ, {"WORKER_URL": worker_url, "CONNECT_IP": "127.0.0.1"}):
+            self.assertEqual(push.main(["--target", "google-dev"]), 0)
+            (_, headers, body), = self.worker.puts
+            self.assertEqual(headers["Authorization"], "Bearer " + self.key)
+            self.assertEqual(body, self.source.snapshot)
+            # 포트 포함 시 Host 에는 포트까지 붙는다.
+            self.assertEqual(
+                headers["Host"],
+                f"task-dashboard-dev.velar-agent.duckdns.org:{self.worker.server_port}",
+            )
+            self.assertTrue(self.google_dev_state.exists())
+
+    def test_google_prod_uses_own_default_url_key_hash_and_lock(self):
+        config = self.state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-google-prod").write_text("google-prod-fixture", encoding="ascii")
+        (config / "ingest-key-google-dev").write_text("google-dev-fixture", encoding="ascii")
+        (config / "ingest-key").write_text("prod-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.state.parent), "CONNECT_IP": ""}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                self.assertEqual(push.main(["--target", "google-prod"]), 0)
+                upload = http.call_args.args[0]
+                self.assertEqual(
+                    upload.full_url,
+                    "http://task-dashboard.velar-agent.duckdns.org/api/ingest",
+                )
+                self.assertEqual(upload.get_header("Authorization"), "Bearer " + "google-prod-fixture")
+                self.assertEqual(upload.data, body)
+                self.assertRegex(self.google_prod_state.read_text().strip(), r"^[0-9a-f]{64}$")
+                self.assertTrue(self.google_prod_state.with_suffix(".lock").is_file())
+                self.assertFalse(self.state.exists())
+                self.assertFalse(self.dev_state.exists())
+                self.assertFalse(self.google_dev_state.exists())
+
+    def test_google_prod_honors_url_and_key_overrides(self):
+        self.assertEqual(push.main(["--target", "google-prod"]), 0)
+        (_, headers, body), = self.worker.puts
+        self.assertEqual(headers["Authorization"], "Bearer " + self.key)
+        self.assertEqual(body, self.source.snapshot)
+        self.assertTrue(self.google_prod_state.exists())
+        self.assertFalse(self.state.exists())
+        self.assertFalse(self.dev_state.exists())
+        self.assertFalse(self.google_dev_state.exists())
+
+    def test_google_prod_connect_ip_rewrites_host(self):
+        config = self.state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-google-prod").write_text("google-prod-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.state.parent), "CONNECT_IP": "192.0.2.99"}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                self.assertEqual(push.main(["--target", "google-prod"]), 0)
+                upload = http.call_args.args[0]
+                self.assertEqual(upload.full_url, "http://192.0.2.99/api/ingest")
+                self.assertEqual(
+                    upload.get_header("Host"),
+                    "task-dashboard.velar-agent.duckdns.org",
+                )
+                self.assertEqual(upload.get_header("Authorization"), "Bearer " + "google-prod-fixture")
+
+    def test_google_prod_connect_ip_live_host_header(self):
+        worker_url = (
+            f"http://task-dashboard.velar-agent.duckdns.org:{self.worker.server_port}/"
+        )
+        with patch.dict(os.environ, {"WORKER_URL": worker_url, "CONNECT_IP": "127.0.0.1"}):
+            self.assertEqual(push.main(["--target", "google-prod"]), 0)
+            (_, headers, body), = self.worker.puts
+            self.assertEqual(headers["Authorization"], "Bearer " + self.key)
+            self.assertEqual(body, self.source.snapshot)
+            self.assertEqual(
+                headers["Host"],
+                f"task-dashboard.velar-agent.duckdns.org:{self.worker.server_port}",
+            )
+            self.assertTrue(self.google_prod_state.exists())
+
+    def test_google_dev_connect_ip_ipv4_rewrites_host(self):
+        config = self.state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-google-dev").write_text("google-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.state.parent), "CONNECT_IP": "203.0.113.10"}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                self.assertEqual(push.main(["--target", "google-dev"]), 0)
+                upload = http.call_args.args[0]
+                self.assertEqual(upload.full_url, "http://203.0.113.10/api/ingest")
+                self.assertEqual(upload.get_header("Host"), "task-dashboard-dev.velar-agent.duckdns.org")
+                self.assertEqual(upload.get_header("Authorization"), "Bearer " + "google-fixture")
+
+    def test_google_dev_connect_ip_ipv6_rewrites_host(self):
+        config = self.state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-google-dev").write_text("google-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.state.parent), "CONNECT_IP": "2001:db8::1"}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                self.assertEqual(push.main(["--target", "google-dev"]), 0)
+                upload = http.call_args.args[0]
+                self.assertEqual(upload.full_url, "http://[2001:db8::1]/api/ingest")
+                self.assertEqual(upload.get_header("Host"), "task-dashboard-dev.velar-agent.duckdns.org")
+                self.assertEqual(upload.get_header("Authorization"), "Bearer " + "google-fixture")
+
+    def test_google_dev_connect_ip_with_port_is_rejected(self):
+        invalid = "192.0.2.99:8080"
+        config = self.state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-google-dev").write_text("google-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.state.parent), "CONNECT_IP": invalid}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                with self.assertRaises(push.PushError) as ctx:
+                    push.push_once(True, "google-dev")
+                self.assertEqual(str(ctx.exception), "CONNECT_IP 는 IP 주소여야 합니다")
+                self.assertNotIn(invalid, str(ctx.exception))
+                self.assertEqual(http.call_count, 1)
+                self.assertFalse(self.google_dev_state.exists())
+
+    def test_google_dev_connect_ip_hostname_is_rejected(self):
+        invalid = "example.com"
+        config = self.state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-google-dev").write_text("google-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.state.parent), "CONNECT_IP": invalid}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                self.assertEqual(push.main(["--target", "google-dev"]), 1)
+                self.assertEqual(self.stderr.getvalue().strip(), "스냅샷 푸시 실패 - CONNECT_IP 는 IP 주소여야 합니다")
+                self.assertNotIn(invalid, self.stderr.getvalue())
+                self.assertEqual(http.call_count, 1)
+                self.assertFalse(self.google_dev_state.exists())
+
+    def test_google_prod_state_is_separate_from_google_dev(self):
+        config = self.state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-google-prod").write_text("google-prod-fixture", encoding="ascii")
+        (config / "ingest-key-google-dev").write_text("google-dev-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.state.parent), "CONNECT_IP": ""}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                self.assertEqual(push.main(["--target", "google-dev"]), 0)
+                self.assertTrue(self.google_dev_state.exists())
+                self.assertFalse(self.google_prod_state.exists())
+                http.reset_mock()
+                # 같은 소스도 prod 해시가 분리되어 있어 다시 전송한다.
+                self.assertEqual(push.main(["--target", "google-prod"]), 0)
+                self.assertTrue(self.google_prod_state.exists())
+                self.assertEqual(self.google_dev_state.read_bytes(), self.google_prod_state.read_bytes())
 
     def test_concurrent_checks_send_one_snapshot(self):
         with ThreadPoolExecutor(max_workers=2) as pool:
