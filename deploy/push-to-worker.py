@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 
 
 STATE_FILE = Path(f"/tmp/task-push-{os.getuid()}.sha")
+DEV_STATE_FILE = Path(f"/tmp/task-push-dev-{os.getuid()}.sha")
 
 
 class PushError(Exception):
@@ -34,12 +35,14 @@ def request_body(request, operation):
         raise PushError(f"{operation} ({type(error).__name__})") from None
 
 
-def push_once(force):
+def push_once(force, target="prod"):
+    suffix = "-dev" if target == "dev" else ""
+    state_file = DEV_STATE_FILE if target == "dev" else STATE_FILE
     source = os.environ.get("SOURCE_URL", "http://127.0.0.1:8787/api/tasks")
-    worker = os.environ.get("WORKER_URL", "https://task-dashboard.velar-agent.workers.dev")
+    worker = os.environ.get("WORKER_URL", f"https://task-dashboard{suffix}.velar-agent.workers.dev")
 
     # 두 프로세스가 겹쳐도 소스 조회, PUT, 해시 기록 순서가 뒤집히지 않게 한다.
-    with STATE_FILE.with_suffix(".lock").open("a") as lock:
+    with state_file.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         body = request_body(source, "소스 조회")
         snapshot = json.loads(body)
@@ -48,13 +51,13 @@ def push_once(force):
         tasks = json.dumps(snapshot["tasks"], sort_keys=True, separators=(",", ":")).encode("ascii")
         digest = hashlib.sha256(tasks).hexdigest().encode("ascii")
         try:
-            if not force and STATE_FILE.read_bytes().strip() == digest:
+            if not force and state_file.read_bytes().strip() == digest:
                 return
         except FileNotFoundError:
             pass
 
         try:
-            key_file = Path(os.environ.get("KEY_FILE", "~/.config/task-dashboard/ingest-key")).expanduser()
+            key_file = Path(os.environ.get("KEY_FILE", f"~/.config/task-dashboard/ingest-key{suffix}")).expanduser()
             key = key_file.read_text(encoding="ascii").strip()
         except (OSError, UnicodeError) as error:
             raise PushError(f"KEY_FILE 읽기 실패 ({type(error).__name__})") from None
@@ -66,10 +69,10 @@ def push_once(force):
             "User-Agent": "task-dashboard-push/1.0",
         })
         request_body(upload, "Worker 전송")
-        with tempfile.TemporaryDirectory(dir=STATE_FILE.parent) as directory:
-            staged = Path(directory) / STATE_FILE.name
+        with tempfile.TemporaryDirectory(dir=state_file.parent) as directory:
+            staged = Path(directory) / state_file.name
             staged.write_bytes(digest + b"\n")
-            staged.replace(STATE_FILE)
+            staged.replace(state_file)
 
 
 def positive_seconds(value):
@@ -81,6 +84,7 @@ def positive_seconds(value):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--target", choices=("prod", "dev"), default="prod", help="전송 대상 (기본 prod).")
     parser.add_argument("--loop", nargs="?", const=15, type=positive_seconds, metavar="초",
                         help="지정한 간격으로 반복합니다 (기본 15초).")
     parser.add_argument("--force", action="store_true", help="같은 작업도 다시 전송합니다.")
@@ -88,7 +92,7 @@ def main(argv=None):
     while True:
         status = 0
         try:
-            push_once(args.force)
+            push_once(args.force, args.target)
         except Exception as error:
             # 원래 예외 메시지에는 서버가 돌려준 키나 헤더 값이 들어갈 수 있다.
             reason = str(error) if isinstance(error, PushError) else type(error).__name__

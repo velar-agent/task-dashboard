@@ -66,6 +66,8 @@ class PushTests(unittest.TestCase):
         root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
         self.state = root / "state.sha"
         stack.enter_context(patch.object(push, "STATE_FILE", self.state))
+        self.dev_state = root / "dev.sha"
+        stack.enter_context(patch.object(push, "DEV_STATE_FILE", self.dev_state))
         self.key = "unit-test-ingest-key"
         key_file = root / "key"
         key_file.write_text(self.key + "\n", encoding="ascii")
@@ -133,6 +135,37 @@ class PushTests(unittest.TestCase):
         self.assertEqual(push.main([]), 0)
         self.assertNotEqual(self.state.read_bytes(), previous)
         self.assertEqual(self.worker.puts[-1][2]["tasks"], [])
+
+    def test_dev_uses_own_default_url_key_hash_and_lock(self):
+        config = self.state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-dev").write_text("dev-fixture", encoding="ascii")
+        (config / "ingest-key").write_text("prod-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.state.parent)}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                for args, name, fixture in ((["--target", "dev"], "task-dashboard-dev", "dev-fixture"),
+                                            ([], "task-dashboard", "prod-fixture")):
+                    self.assertEqual(push.main(args), 0)
+                    upload = http.call_args.args[0]
+                    self.assertEqual(upload.full_url, f"https://{name}.velar-agent.workers.dev/api/ingest")
+                    self.assertEqual(upload.get_header("Authorization"), "Bearer " + fixture)
+                    self.assertEqual(upload.data, body)
+                self.assertEqual(self.dev_state.read_bytes(), self.state.read_bytes())
+                self.assertTrue(self.dev_state.with_suffix(".lock").is_file())
+                self.assertTrue(self.state.with_suffix(".lock").is_file())
+                http.reset_mock()
+                self.assertEqual(push.main(["--target", "dev"]), 0)
+                self.assertEqual(http.call_count, 1)  # 소스 조회만 수행
+
+    def test_dev_honors_url_and_key_overrides(self):
+        self.assertEqual(push.main(["--target", "dev"]), 0)
+        (_, headers, body), = self.worker.puts
+        self.assertEqual(headers["Authorization"], "Bearer " + self.key)
+        self.assertEqual(body, self.source.snapshot)
+        self.assertTrue(self.dev_state.exists())
+        self.assertFalse(self.state.exists())
 
     def test_concurrent_checks_send_one_snapshot(self):
         with ThreadPoolExecutor(max_workers=2) as pool:

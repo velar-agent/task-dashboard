@@ -3,3 +3,4 @@ __pycache__/
 tasks.jsonl
 *.jsonl
 worker/node_modules/
+.wrangler/
