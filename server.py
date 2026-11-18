@@ -148,6 +148,26 @@ PAGE = """<!doctype html>
     .filter:hover { background: #f1f5f8; }
     .filter[aria-pressed="true"] { background: #e4eff7; color: #194f78; }
     .count { min-width: 1.4em; text-align: center; font: .78rem var(--mono); }
+    .column-menu { position: relative; margin-left: auto; }
+    .columns-button {
+      padding: 7px 12px; border: 1px solid #cbd7df; border-radius: 7px;
+      background: white; font-weight: 600; white-space: nowrap;
+    }
+    .columns-button:hover { background: #edf4f7; }
+    .columns-panel {
+      position: absolute; right: 0; top: calc(100% + 6px); z-index: 20;
+      min-width: 10.5rem; max-width: min(18rem, calc(100vw - 32px));
+      padding: 8px; border: 1px solid var(--line); border-radius: 10px;
+      background: white; box-shadow: 0 12px 32px rgb(23 45 64 / .18);
+    }
+    .columns-panel[hidden] { display: none; }
+    .columns-panel label {
+      display: flex; align-items: center; gap: 8px; padding: 7px 8px;
+      border-radius: 6px; font-size: .9rem; font-weight: 550; cursor: pointer;
+    }
+    .columns-panel label:hover { background: #f1f5f8; }
+    .columns-panel input { width: 1rem; height: 1rem; accent-color: var(--accent); }
+    .columns-panel input:disabled { cursor: not-allowed; opacity: .5; }
     .scroll { overflow-x: auto; border-radius: 0 0 12px 12px; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left; }
     .tasks { min-width: 1160px; }
@@ -169,7 +189,13 @@ PAGE = """<!doctype html>
       transform: translateY(-2px) rotate(-45deg);
     }
     .expanded .caret { transform: translateY(-4px) rotate(45deg); }
-    .task-id { display: block; color: var(--muted); margin-top: 3px; font: .73rem/1.4 var(--mono); }
+    .task-label { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; min-width: 0; }
+    .task-id {
+      display: inline-block; max-width: 100%; padding: 2px 8px; border: 1px solid #cbd7df;
+      border-radius: 999px; background: #e4eff7; color: #194f78;
+      font: 650 .85rem/1.4 var(--mono); letter-spacing: .01em; overflow-wrap: anywhere;
+    }
+    .task-title { display: block; overflow-wrap: anywhere; }
     .free-text { white-space: pre-wrap; }
     .badge {
       display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
@@ -223,6 +249,10 @@ PAGE = """<!doctype html>
           <button class="filter" type="button" data-status="완료" aria-pressed="false">완료 <span class="count">—</span></button>
           <button class="filter" type="button" data-status="막힘" aria-pressed="false">막힘 <span class="count">—</span></button>
         </div>
+        <div class="column-menu">
+          <button type="button" id="columns-button" class="columns-button" aria-haspopup="true" aria-expanded="false" aria-controls="columns-panel">열 ▾</button>
+          <div id="columns-panel" class="columns-panel" role="group" aria-label="표시할 열" hidden></div>
+        </div>
       </div>
       <div class="scroll" tabindex="0" role="region" aria-label="작업 표">
         <table class="tasks" aria-label="작업 현황">
@@ -248,10 +278,64 @@ PAGE = """<!doctype html>
     const refreshButton = document.getElementById("refresh");
     const notice = document.getElementById("notice");
     const updated = document.getElementById("updated");
+    const table = document.querySelector(".tasks");
+    const colgroup = table.querySelector("colgroup");
+    const headRow = table.querySelector("thead tr");
+    const columnsButton = document.getElementById("columns-button");
+    const columnsPanel = document.getElementById("columns-panel");
+    const COLUMNS = [
+      {key: "bot", label: "봇", colClass: "col-bot"},
+      {key: "stage", label: "현재 단계", colClass: "col-stage"},
+      {key: "title", label: "작업", colClass: "col-title"},
+      {key: "started", label: "시작", colClass: "col-time"},
+      {key: "updated", label: "마지막 업데이트", colClass: "col-time", ariaSort: "descending"},
+      {key: "note", label: "메모", colClass: "col-note"},
+      {key: "next", label: "다음 할 일", colClass: "col-next"},
+    ];
+    const STORAGE_KEY = "task-dashboard.columns";
+    const COLUMN_WIDTHS = {bot: 10, stage: 8, title: 23, started: 13, updated: 13, note: 18, next: 15};
     let tasks = [];
     let selected = "전체";
     let expandedId = null;
     let loaded = false;
+
+    function defaultVisibleKeys() {
+      return COLUMNS.map(column => column.key);
+    }
+
+    function loadVisibleColumns() {
+      let raw;
+      try {
+        raw = localStorage.getItem(STORAGE_KEY);
+      } catch {
+        return defaultVisibleKeys();
+      }
+      if (raw === null) return defaultVisibleKeys();
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return defaultVisibleKeys();
+        const known = new Set(COLUMNS.map(column => column.key));
+        const found = new Set(parsed.filter(value => typeof value === "string" && known.has(value)));
+        if (!found.size) return defaultVisibleKeys();
+        return COLUMNS.map(column => column.key).filter(key => found.has(key));
+      } catch {
+        return defaultVisibleKeys();
+      }
+    }
+
+    let visible = new Set(loadVisibleColumns());
+
+    function visibleKeys() {
+      return COLUMNS.map(column => column.key).filter(key => visible.has(key));
+    }
+
+    function saveVisibleColumns() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(visibleKeys()));
+      } catch {
+        // 사생활 모드 등 저장 실패는 무시하고 기본 동작을 유지한다.
+      }
+    }
 
     function element(tag, className, text) {
       const node = document.createElement(tag);
@@ -294,7 +378,7 @@ PAGE = """<!doctype html>
       const row = element("tr", "history");
       row.id = id;
       const cell = element("td");
-      cell.colSpan = 7;
+      cell.colSpan = visible.size;
       const table = element("table");
       table.setAttribute("aria-label", "이벤트 이력");
       const header = table.createTHead().insertRow();
@@ -316,7 +400,7 @@ PAGE = """<!doctype html>
     function emptyRow(message) {
       const row = element("tr");
       const cell = element("td", "empty", message);
-      cell.colSpan = 7;
+      cell.colSpan = visible.size;
       row.append(cell);
       return row;
     }
@@ -338,6 +422,55 @@ PAGE = """<!doctype html>
       botFilter.value = names.has(previous) ? previous : "";
     }
 
+    function applyColumnsToHeader() {
+      colgroup.replaceChildren();
+      headRow.replaceChildren();
+      for (const column of COLUMNS) {
+        if (!visible.has(column.key)) continue;
+        const col = element("col", column.colClass);
+        colgroup.append(col);
+        const th = element("th", "", column.label);
+        th.scope = "col";
+        if (column.ariaSort) th.setAttribute("aria-sort", column.ariaSort);
+        headRow.append(th);
+      }
+      const total = visibleKeys().reduce((sum, key) => sum + (COLUMN_WIDTHS[key] || 0), 0);
+      // 11.6은 기본 최소 너비 1160px를 열 폭 합 100으로 나눈 값이다.
+      table.style.minWidth = Math.max(320, Math.round(total * 11.6)) + "px";
+      for (const cell of rows.querySelectorAll("td.empty")) {
+        cell.colSpan = visible.size;
+      }
+    }
+
+    function updatePanelDisabled() {
+      for (const input of columnsPanel.querySelectorAll("input")) {
+        input.disabled = visible.size === 1 && input.checked;
+      }
+    }
+
+    function buildColumnPanel() {
+      columnsPanel.replaceChildren();
+      for (const column of COLUMNS) {
+        const label = element("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = visible.has(column.key);
+        input.dataset.column = column.key;
+        label.append(input, element("span", "", column.label));
+        columnsPanel.append(label);
+      }
+      updatePanelDisabled();
+    }
+
+    function isPanelOpen() {
+      return columnsButton.getAttribute("aria-expanded") === "true";
+    }
+
+    function setPanelOpen(open) {
+      columnsButton.setAttribute("aria-expanded", String(open));
+      columnsPanel.hidden = !open;
+    }
+
     function render() {
       const botTasks = botFilter.value ? tasks.filter(task => botName(task) === botFilter.value) : tasks;
       for (const button of filters) {
@@ -347,26 +480,53 @@ PAGE = """<!doctype html>
         button.setAttribute("aria-pressed", String(status === selected));
       }
       if (!loaded) return;
-      const visible = botTasks.filter(task => selected === "전체" || task.status === selected);
+      const matching = botTasks.filter(task => selected === "전체" || task.status === selected);
       const fragment = document.createDocumentFragment();
       const focusedId = document.activeElement?.dataset.taskId;
+      const titleHidden = !visible.has("title");
       let restoreFocus;
-      for (const [index, task] of visible.entries()) {
+      for (const [index, task] of matching.entries()) {
         const expanded = task.task_id === expandedId;
         const row = element("tr", expanded ? "task-row expanded" : "task-row");
+        if (titleHidden) {
+          row.setAttribute("tabindex", "0");
+          row.setAttribute("aria-expanded", String(expanded));
+          row.setAttribute("aria-label", task.task_id + " 이력 보기");
+          row.dataset.taskId = task.task_id;
+          row.addEventListener("keydown", event => {
+            if (event.target !== row) return;
+            if (event.key === "Enter" || event.key === " " || event.key === "Spacebar" || event.key === "Space") {
+              if (event.key !== "Enter") event.preventDefault();
+              expandedId = expanded ? null : task.task_id;
+              render();
+            }
+          });
+        }
         const titleCell = element("td");
         const toggle = element("button", "task-toggle");
         toggle.type = "button";
         toggle.dataset.taskId = task.task_id;
         toggle.setAttribute("aria-expanded", String(expanded));
-        const label = element("span", "", task.title || task.task_id);
-        if (task.title) label.append(element("small", "task-id", task.task_id));
+        const label = element("span", "task-label");
+        label.append(element("span", "task-id", task.task_id));
+        if (task.title) label.append(element("span", "task-title", task.title));
         const caret = element("span", "caret");
         caret.setAttribute("aria-hidden", "true");
         toggle.append(caret, label);
         titleCell.append(toggle);
-        row.append(textCell(botName(task)), stageCell(task.stage), titleCell, timeCell(task.started),
-                   timeCell(task.updated), textCell(task.note), textCell(task.next));
+        const cellByKey = {
+          bot: () => textCell(botName(task)),
+          stage: () => stageCell(task.stage),
+          title: () => titleCell,
+          started: () => timeCell(task.started),
+          updated: () => timeCell(task.updated),
+          note: () => textCell(task.note),
+          next: () => textCell(task.next),
+        };
+        for (const column of COLUMNS) {
+          if (!visible.has(column.key)) continue;
+          row.append(cellByKey[column.key]());
+        }
         row.addEventListener("click", () => {
           expandedId = expanded ? null : task.task_id;
           render();
@@ -377,9 +537,9 @@ PAGE = """<!doctype html>
           toggle.setAttribute("aria-controls", id);
           fragment.append(historyRow(task, id));
         }
-        if (task.task_id === focusedId) restoreFocus = toggle;
+        if (task.task_id === focusedId) restoreFocus = titleHidden ? row : toggle;
       }
-      if (!visible.length) {
+      if (!matching.length) {
         fragment.append(emptyRow(selected === "전체" ? "등록된 작업이 없습니다." : "이 상태의 작업이 없습니다."));
       }
       rows.replaceChildren(fragment);
@@ -415,6 +575,47 @@ PAGE = """<!doctype html>
         refreshButton.disabled = false;
       }
     }
+
+    columnsButton.addEventListener("click", () => {
+      setPanelOpen(!isPanelOpen());
+    });
+
+    columnsPanel.addEventListener("change", event => {
+      const input = event.target;
+      if (!(input instanceof HTMLInputElement) || !input.dataset.column) return;
+      const key = input.dataset.column;
+      if (input.checked) {
+        visible.add(key);
+      } else {
+        if (visible.size <= 1) {
+          input.checked = true;
+          return;
+        }
+        visible.delete(key);
+      }
+      saveVisibleColumns();
+      applyColumnsToHeader();
+      updatePanelDisabled();
+      render();
+    });
+
+    document.addEventListener("click", event => {
+      if (!isPanelOpen()) return;
+      const target = event.target;
+      if (target instanceof Node && columnsButton.contains(target)) return;
+      if (target instanceof Node && columnsPanel.contains(target)) return;
+      setPanelOpen(false);
+    });
+
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && isPanelOpen()) {
+        setPanelOpen(false);
+        columnsButton.focus();
+      }
+    });
+
+    buildColumnPanel();
+    applyColumnsToHeader();
 
     refreshButton.addEventListener("click", refresh);
     refresh();
