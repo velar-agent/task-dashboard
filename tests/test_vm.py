@@ -264,29 +264,48 @@ class VmApiTests(unittest.TestCase):
             self.assertEqual(status, 200)
             _, _, original = req_json(port, "GET", "/api/tasks")
 
-            # Content-Length 로 초과 (헤더검사)
-            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-            conn.putrequest("PUT", "/api/ingest")
-            conn.putheader("Authorization", f"Bearer {SECRET}")
-            conn.putheader("Content-Length", str(MAX_BODY + 1))
-            conn.endheaders()
-            # 본문은 보내고 읽지 않아도 413 이어야 한다
-            try:
-                conn.send(b"{}")
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            resp = conn.getresponse()
-            resp.read()
-            self.assertEqual(resp.status, 413)
-            conn.close()
+            def assert_oversize_rejected(declared_length, payload):
+                # 서버는 Content-Length를 보고 즉시 413을 보내고 연결을 닫을 수 있다.
+                # 클라이언트는 그 사이 큰 본문을 아직 보내고 있을 수 있어 전송 중
+                # BrokenPipeError/ConnectionResetError가 나는 레이스가 있다.
+                # 이때는 응답을 읽어 413을 확인하거나, 응답 자체를 못 읽으면
+                # 거부됨으로 간주하고 스냅샷 무변경을 검증한다.
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                try:
+                    try:
+                        conn.putrequest("PUT", "/api/ingest")
+                        conn.putheader("Authorization", f"Bearer {SECRET}")
+                        conn.putheader("Content-Length", str(declared_length))
+                        conn.endheaders()
+                        if payload:
+                            conn.send(payload)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    try:
+                        resp = conn.getresponse()
+                        self.assertEqual(resp.status, 413)
+                        data = resp.read()
+                        self.assertEqual(
+                            json.loads(data.decode("utf-8")),
+                            {"error": "본문이 1 MiB를 초과합니다."},
+                        )
+                    except (BrokenPipeError, ConnectionResetError, http.client.HTTPException):
+                        # RST/조기 종료로 413 응답을 못 읽으면 거부됨으로 간주하고
+                        # 아래 스냅샷 무변경 검증으로 확인한다.
+                        pass
+                finally:
+                    conn.close()
+                _, _, current = req_json(port, "GET", "/api/tasks")
+                self.assertEqual(current, original)
+
+            # Content-Length 로 초과 (헤더검사: 본문은 적게 보내도 413이어야 한다)
+            assert_oversize_rejected(MAX_BODY + 1, b"{}")
 
             # 실제 바이트로 초과
             big = ('{"tasks":[{"task_id":"x"}]}' + " " * MAX_BODY).encode("utf-8")
             big = big[: MAX_BODY + 1]
             self.assertGreater(len(big), MAX_BODY)
-            status, _, body = req_json(port, "PUT", "/api/ingest", body=big, headers=auth)
-            self.assertEqual(status, 413)
-            self.assertEqual(body, {"error": "본문이 1 MiB를 초과합니다."})
+            assert_oversize_rejected(len(big), big)
 
             # 정확히 1MiB 는 통과 (JSON 뒤 공백 패딩)
             source = '{"tasks":[{"task_id":"한"}]}'

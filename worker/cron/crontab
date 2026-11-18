@@ -1,4 +1,0 @@
-# GCE 시스템 cron용. /etc/cron.d/task-dashboard-nightly에 설치한다.
-CRON_TZ=Asia/Seoul
-TZ=Asia/Seoul
-0 0 * * * collector /workspace/task-dashboard/worker/scripts/nightly-promote.sh

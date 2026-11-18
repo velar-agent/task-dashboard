@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """구글 VM용 서버 (dev/prod 공통, 표준 라이브러리만 사용).
 
-worker/src/index.js 와 동일한 API 를 제공하며, HTML 화면은 같은
-저장소의 server.py 의 PAGE 를 재사용한다.
+HTML 화면은 같은 저장소의 server.py 의 PAGE 를 재사용한다.
 """
 
 import hmac
@@ -306,8 +305,7 @@ class DevHandler(BaseHTTPRequestHandler):
     def _handle(self):
         path = self._path()
         method = self.command
-        # worker/src/index.js 와 동일한 순서: ingest 경로 분리, 그 다음
-        # 경로 존재 검사, 그 다음 메서드 검사.
+        # ingest 경로 분리, 그 다음 경로 존재 검사, 그 다음 메서드 검사.
         if path == "/api/ingest":
             if method != "PUT":
                 self._method_not_allowed("PUT")
