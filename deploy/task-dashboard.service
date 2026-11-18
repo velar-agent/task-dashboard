@@ -1,5 +1,5 @@
 [Unit]
-Description=Task Dashboard (Engineering 작업 현황)
+Description=Task Dashboard (봇 작업 현황)
 After=network.target
 
 [Service]

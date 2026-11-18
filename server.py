@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Engineering 작업 대시보드."""
+"""봇 작업 현황 대시보드."""
 
 import json
 import logging
@@ -92,7 +92,7 @@ PAGE = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>작업 현황 · Engineering</title>
+  <title>봇 작업 현황</title>
   <style>
     :root {
       color-scheme: light;
@@ -133,7 +133,13 @@ PAGE = """<!doctype html>
     .refresh:hover { background: #edf4f7; }
     .refresh:disabled { opacity: .6; cursor: progress; }
     .board { background: white; border: 1px solid var(--line); border-radius: 12px; }
-    .filters { display: flex; gap: 5px; padding: 14px; overflow-x: auto; }
+    .filter-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; padding: 14px; }
+    .bot-filter { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .9rem; font-weight: 600; }
+    .bot-filter select {
+      max-width: min(15rem, 65vw); padding: 6px 8px; border: 1px solid #cbd7df; border-radius: 6px;
+      background: white; color: var(--ink); font: inherit;
+    }
+    .filters { display: flex; gap: 5px; overflow-x: auto; }
     .filter {
       display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
       border: 0; background: transparent; color: var(--muted); border-radius: 6px;
@@ -145,7 +151,7 @@ PAGE = """<!doctype html>
     .scroll { overflow-x: auto; border-radius: 0 0 12px 12px; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left; }
     .tasks { min-width: 1160px; }
-    .col-title { width: 23%; } .col-bot { width: 10%; } .col-stage { width: 8%; }
+    .col-bot { width: 10%; } .col-stage { width: 8%; } .col-title { width: 23%; }
     .col-time { width: 13%; } .col-note { width: 18%; } .col-next { width: 15%; }
     th, td { padding: 15px 12px; overflow-wrap: anywhere; }
     th { background: #f2f5f7; color: var(--muted); font-size: .8rem; font-weight: 650; }
@@ -186,7 +192,8 @@ PAGE = """<!doctype html>
       .wrap { width: calc(100% - 24px); }
       main { padding-top: 24px; }
       .heading { align-items: flex-start; flex-direction: column; gap: 10px; }
-      .filters { gap: 2px; padding: 9px 6px; }
+      .filter-bar { padding: 9px 6px; }
+      .filters { gap: 2px; }
       .filter { padding: 8px; gap: 4px; }
       .empty { text-align: left; }
     }
@@ -194,12 +201,12 @@ PAGE = """<!doctype html>
 </head>
 <body>
   <header class="masthead"><div class="wrap">
-    <div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>Engineering</div>
+    <div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>봇 대시보드</div>
     <span class="auto">30초마다 자동 갱신</span>
   </div></header>
   <main class="wrap">
     <div class="heading">
-      <h1>작업 현황</h1>
+      <h1>봇 작업 현황</h1>
       <div class="refresh-info">
         <span>마지막 갱신 (KST) <time id="updated">—</time></span>
         <button type="button" id="refresh" class="refresh">새로고침</button>
@@ -207,21 +214,24 @@ PAGE = """<!doctype html>
     </div>
     <p id="notice" class="notice" role="alert" hidden>작업 목록을 불러오지 못했습니다. 새로고침으로 다시 시도할 수 있습니다.</p>
     <noscript>작업 목록을 보려면 자바스크립트를 켜 주세요.</noscript>
-    <section class="board" aria-label="Engineering 작업 목록">
-      <div class="filters" role="group" aria-label="작업 상태 필터">
-        <button class="filter" type="button" data-status="전체" aria-pressed="true">전체 <span class="count">—</span></button>
-        <button class="filter" type="button" data-status="진행 중" aria-pressed="false">진행 중 <span class="count">—</span></button>
-        <button class="filter" type="button" data-status="완료" aria-pressed="false">완료 <span class="count">—</span></button>
-        <button class="filter" type="button" data-status="막힘" aria-pressed="false">막힘 <span class="count">—</span></button>
+    <section class="board" aria-label="봇 작업 목록">
+      <div class="filter-bar">
+        <label class="bot-filter">봇 <select id="bot-filter"><option value="">전체</option></select></label>
+        <div class="filters" role="group" aria-label="작업 상태 필터">
+          <button class="filter" type="button" data-status="전체" aria-pressed="true">전체 <span class="count">—</span></button>
+          <button class="filter" type="button" data-status="진행 중" aria-pressed="false">진행 중 <span class="count">—</span></button>
+          <button class="filter" type="button" data-status="완료" aria-pressed="false">완료 <span class="count">—</span></button>
+          <button class="filter" type="button" data-status="막힘" aria-pressed="false">막힘 <span class="count">—</span></button>
+        </div>
       </div>
       <div class="scroll" tabindex="0" role="region" aria-label="작업 표">
         <table class="tasks" aria-label="작업 현황">
           <colgroup>
-            <col class="col-title"><col class="col-bot"><col class="col-stage">
+            <col class="col-bot"><col class="col-stage"><col class="col-title">
             <col class="col-time"><col class="col-time"><col class="col-note"><col class="col-next">
           </colgroup>
           <thead><tr>
-            <th scope="col">작업</th><th scope="col">봇</th><th scope="col">현재 단계</th>
+            <th scope="col">봇</th><th scope="col">현재 단계</th><th scope="col">작업</th>
             <th scope="col">시작</th><th scope="col" aria-sort="descending">마지막 업데이트</th>
             <th scope="col">메모</th><th scope="col">다음 할 일</th>
           </tr></thead>
@@ -234,6 +244,7 @@ PAGE = """<!doctype html>
     "use strict";
     const rows = document.getElementById("rows");
     const filters = document.querySelectorAll(".filter");
+    const botFilter = document.getElementById("bot-filter");
     const refreshButton = document.getElementById("refresh");
     const notice = document.getElementById("notice");
     const updated = document.getElementById("updated");
@@ -251,6 +262,11 @@ PAGE = """<!doctype html>
 
     function setTime(node, iso) {
       // API 시각은 모두 +09:00이므로 브라우저의 시간대와 무관하다.
+      if (!iso || typeof iso !== "string") {
+        node.removeAttribute("datetime");
+        node.textContent = "—";
+        return;
+      }
       node.dateTime = iso;
       node.textContent = iso.slice(0, 16).replace("T", " ");
     }
@@ -305,22 +321,40 @@ PAGE = """<!doctype html>
       return row;
     }
 
+    function botName(task) {
+      const name = typeof task.bot === "string" ? task.bot.trim() : "";
+      return name || "(미지정)";
+    }
+
+    function updateBotOptions() {
+      const previous = botFilter.value;
+      const names = new Set(tasks.map(botName));
+      botFilter.replaceChildren(botFilter.firstElementChild);
+      for (const name of [...names].sort((a, b) => a.localeCompare(b, "ko"))) {
+        const option = element("option", "", name);
+        option.value = name;
+        botFilter.append(option);
+      }
+      botFilter.value = names.has(previous) ? previous : "";
+    }
+
     function render() {
+      const botTasks = botFilter.value ? tasks.filter(task => botName(task) === botFilter.value) : tasks;
       for (const button of filters) {
         const status = button.dataset.status;
-        const count = status === "전체" ? tasks.length : tasks.filter(t => t.status === status).length;
+        const count = status === "전체" ? botTasks.length : botTasks.filter(t => t.status === status).length;
         button.querySelector(".count").textContent = loaded ? count : "—";
         button.setAttribute("aria-pressed", String(status === selected));
       }
       if (!loaded) return;
-      const visible = tasks.filter(task => selected === "전체" || task.status === selected);
+      const visible = botTasks.filter(task => selected === "전체" || task.status === selected);
       const fragment = document.createDocumentFragment();
       const focusedId = document.activeElement?.dataset.taskId;
       let restoreFocus;
       for (const [index, task] of visible.entries()) {
         const expanded = task.task_id === expandedId;
         const row = element("tr", expanded ? "task-row expanded" : "task-row");
-        const first = element("td");
+        const titleCell = element("td");
         const toggle = element("button", "task-toggle");
         toggle.type = "button";
         toggle.dataset.taskId = task.task_id;
@@ -330,8 +364,8 @@ PAGE = """<!doctype html>
         const caret = element("span", "caret");
         caret.setAttribute("aria-hidden", "true");
         toggle.append(caret, label);
-        first.append(toggle);
-        row.append(first, textCell(task.bot), stageCell(task.stage), timeCell(task.started),
+        titleCell.append(toggle);
+        row.append(textCell(botName(task)), stageCell(task.stage), titleCell, timeCell(task.started),
                    timeCell(task.updated), textCell(task.note), textCell(task.next));
         row.addEventListener("click", () => {
           expandedId = expanded ? null : task.task_id;
@@ -359,6 +393,8 @@ PAGE = """<!doctype html>
       });
     }
 
+    botFilter.addEventListener("change", render);
+
     async function refresh() {
       if (refreshButton.disabled) return;
       refreshButton.disabled = true;
@@ -366,7 +402,8 @@ PAGE = """<!doctype html>
         const response = await fetch("/api/tasks", {cache: "no-store"});
         if (!response.ok) throw new Error("목록 조회 실패");
         const data = await response.json();
-        tasks = data.tasks.filter(task => task.bot === "Engineering");
+        tasks = data.tasks;
+        updateBotOptions();
         loaded = true;
         render();
         setTime(updated, data.generated_at);
@@ -437,7 +474,7 @@ def main():
     port = int(os.environ.get("PORT", "8787"))
     host = os.environ.get("HOST", "0.0.0.0")
     with ThreadingHTTPServer((host, port), DashboardHandler) as server:
-        print(f"Engineering 작업 대시보드가 {server.server_address[1]} 포트에서 실행 중입니다.", flush=True)
+        print(f"봇 작업 대시보드가 {server.server_address[1]} 포트에서 실행 중입니다.", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
