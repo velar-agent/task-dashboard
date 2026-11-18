@@ -585,3 +585,435 @@ class DashboardUITests(unittest.TestCase):
         self.assertIn("작업", data["headersShown"])
         self.assertEqual(data["toggleCountShown"], 4)
         self.assertEqual(data["rowsShown"], [[False, None, None]] * 4)
+
+    def test_column_order_panel_move_focus_and_reset(self):
+        exercise = """
+            const table = document.querySelector(".tasks");
+            const button = document.getElementById("columns-button");
+            const panel = document.getElementById("columns-panel");
+            const headersOf = () => [...table.tHead.rows[0].cells].map(node => node.textContent);
+            const colsOf = () => [...table.querySelector("colgroup").children].map(node => node.className);
+            const firstCellsOf = () => [...table.tBodies[0].rows[0].cells].map(node => node.textContent);
+            const rowCounts = () => [...table.querySelectorAll(".task-row")].map(row => row.cells.length);
+            const panelKeys = () => [...panel.querySelectorAll(".column-item")].map(node => node.dataset.column);
+            const moveButton = (key, direction) => panel.querySelector(
+              `.column-item[data-column="${key}"] button[data-direction="${direction}"]`);
+            const reset = () => panel.querySelector(".reset-order");
+            observations.idWeight = getComputedStyle(document.querySelector(".task-id")).fontWeight;
+            observations.titleWeight = getComputedStyle(document.querySelector(".task-title")).fontWeight;
+            observations.initial = [panelKeys(), headersOf(), colsOf(), firstCellsOf(), rowCounts(),
+              moveButton("bot", "up").disabled, moveButton("next", "down").disabled,
+              moveButton("bot", "down").disabled, moveButton("next", "up").disabled,
+              moveButton("bot", "up").getAttribute("aria-label"),
+              moveButton("bot", "down").getAttribute("aria-label"),
+              moveButton("bot", "up").textContent, moveButton("bot", "down").textContent,
+              [reset().disabled, reset().textContent, reset().getAttribute("type")]];
+            const toggle = () => [...document.querySelectorAll(".task-toggle")]
+              .find(node => node.dataset.taskId === "active");
+            toggle().focus();
+            toggle().click();
+            observations.historyOpen = [table.querySelector(".history")?.cells[0].colSpan,
+              document.activeElement?.dataset?.taskId];
+            button.click();
+            moveButton("bot", "down").click();
+            observations.afterDown = [panelKeys(), headersOf(), colsOf(), firstCellsOf(), rowCounts(),
+              panel.hidden, button.getAttribute("aria-expanded"),
+              document.activeElement?.getAttribute?.("aria-label"),
+              document.activeElement?.dataset?.direction,
+              localStorage.getItem("task-dashboard.column-order"), reset().disabled,
+              table.querySelector(".history")?.cells[0].colSpan];
+            moveButton("bot", "down").click();
+            observations.afterDown2 = [panelKeys(), headersOf(),
+              document.activeElement?.getAttribute?.("aria-label"),
+              document.activeElement?.dataset?.direction];
+            moveButton("bot", "up").click();
+            moveButton("bot", "up").click();
+            observations.afterUpToTop = [panelKeys(), headersOf(),
+              document.activeElement?.getAttribute?.("aria-label"),
+              document.activeElement?.dataset?.direction,
+              moveButton("bot", "up").disabled, moveButton("bot", "down").disabled];
+            moveButton("bot", "down").click();
+            observations.beforeReset = [panelKeys(), headersOf(), reset().disabled,
+              document.activeElement?.getAttribute?.("aria-label")];
+            reset().click();
+            observations.afterReset = [panelKeys(), headersOf(), panel.hidden,
+              button.getAttribute("aria-expanded"), reset().disabled,
+              localStorage.getItem("task-dashboard.column-order")];
+            const rect = panel.getBoundingClientRect();
+            const moveRect = moveButton("bot", "down").getBoundingClientRect();
+            observations.noOverflow = [document.documentElement.scrollWidth <= window.innerWidth,
+              document.body.scrollWidth <= window.innerWidth, rect.left >= -1,
+              rect.right <= window.innerWidth + 1, window.innerWidth - rect.right >= -1];
+            observations.moveSize = [moveRect.width, moveRect.height];
+        """
+        for width in (1280, 390):
+            with self.subTest(width=width):
+                data = self.observe_page(exercise, width)
+                self.assertEqual(data["idWeight"], "650")
+                self.assertEqual(data["titleWeight"], "400")
+                default = ["bot", "stage", "title", "started", "updated", "note", "next"]
+                moved = ["stage", "bot", "title", "started", "updated", "note", "next"]
+                moved2 = ["stage", "title", "bot", "started", "updated", "note", "next"]
+                default_labels = ["봇", "현재 단계", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"]
+                self.assertEqual(data["initial"][0], default)
+                self.assertEqual(data["initial"][1], default_labels)
+                self.assertEqual(data["initial"][2],
+                                 ["col-bot", "col-stage", "col-title", "col-time", "col-time", "col-note", "col-next"])
+                self.assertEqual(data["initial"][3],
+                                 ["Engineering", "코딩", "active기능 구현", "2026-11-18 10:00",
+                                  "2026-11-18 12:00", "구현 중", "리뷰 요청"])
+                self.assertEqual(data["initial"][4], [7, 7, 7, 7])
+                self.assertEqual(data["initial"][5:9], [True, True, False, False])
+                self.assertEqual(data["initial"][9:13], ["봇 위로 이동", "봇 아래로 이동", "▲", "▼"])
+                self.assertEqual(data["initial"][13], [True, "기본 순서로", "button"])
+                self.assertEqual(data["historyOpen"], [7, "active"])
+                self.assertEqual(data["afterDown"][0], moved)
+                self.assertEqual(data["afterDown"][1],
+                                 ["현재 단계", "봇", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"])
+                self.assertEqual(data["afterDown"][2],
+                                 ["col-stage", "col-bot", "col-title", "col-time", "col-time", "col-note", "col-next"])
+                self.assertEqual(data["afterDown"][3],
+                                 ["코딩", "Engineering", "active기능 구현", "2026-11-18 10:00",
+                                  "2026-11-18 12:00", "구현 중", "리뷰 요청"])
+                self.assertEqual(data["afterDown"][4], [7, 7, 7, 7])
+                self.assertEqual(data["afterDown"][5:9], [False, "true", "봇 아래로 이동", "down"])
+                self.assertEqual(json.loads(data["afterDown"][9]), moved)
+                self.assertFalse(data["afterDown"][10])
+                self.assertEqual(data["afterDown"][11], 7)
+                self.assertEqual(data["afterDown2"][0], moved2)
+                self.assertEqual(data["afterDown2"][1],
+                                 ["현재 단계", "작업", "봇", "시작", "마지막 업데이트", "메모", "다음 할 일"])
+                self.assertEqual(data["afterDown2"][2:4], ["봇 아래로 이동", "down"])
+                self.assertEqual(data["afterUpToTop"][0], default)
+                self.assertEqual(data["afterUpToTop"][1], default_labels)
+                self.assertEqual(data["afterUpToTop"][2:6], ["봇 아래로 이동", "down", True, False])
+                self.assertEqual(data["beforeReset"][0], moved)
+                self.assertFalse(data["beforeReset"][2])
+                self.assertEqual(data["beforeReset"][3], "봇 아래로 이동")
+                self.assertEqual(data["afterReset"][0], default)
+                self.assertEqual(data["afterReset"][1], default_labels)
+                self.assertEqual(data["afterReset"][2:5], [False, "true", True])
+                self.assertEqual(json.loads(data["afterReset"][5]), default)
+                self.assertTrue(all(data["noOverflow"]))
+                self.assertGreaterEqual(data["moveSize"][0], 28)
+                self.assertGreaterEqual(data["moveSize"][1], 28)
+
+    def test_column_order_persistence_and_correction(self):
+        first = self.observe_page("""
+            const table = document.querySelector(".tasks");
+            const panel = document.getElementById("columns-panel");
+            const button = document.getElementById("columns-button");
+            const headersOf = () => [...table.tHead.rows[0].cells].map(node => node.textContent);
+            const panelKeys = () => [...panel.querySelectorAll(".column-item")].map(node => node.dataset.column);
+            const moveButton = (key, direction) => panel.querySelector(
+              `.column-item[data-column="${key}"] button[data-direction="${direction}"]`);
+            button.click();
+            moveButton("bot", "down").click();
+            observations.afterOrder = [headersOf(), panelKeys(),
+              localStorage.getItem("task-dashboard.column-order"),
+              localStorage.getItem("task-dashboard.columns")];
+            panel.querySelector('input[data-column="stage"]').click();
+            observations.afterHide = [headersOf(), panelKeys(),
+              localStorage.getItem("task-dashboard.column-order"),
+              localStorage.getItem("task-dashboard.columns")];
+            document.querySelector('[data-status="완료"]').click();
+            observations.afterTab = headersOf();
+            document.querySelector('[data-status="전체"]').click();
+            await tick();
+            observations.afterRefresh = [headersOf(),
+              localStorage.getItem("task-dashboard.column-order")];
+            panel.querySelector('input[data-column="note"]').click();
+            snapshot = {tasks: [], generated_at: null};
+            await tick();
+            observations.empty = [document.querySelector("td.empty")?.colSpan, headersOf()];
+        """)
+        stored_order = first["afterOrder"][2]
+        second = self.observe_page("""
+            const table = document.querySelector(".tasks");
+            const panel = document.getElementById("columns-panel");
+            observations.headers = [...table.tHead.rows[0].cells].map(node => node.textContent);
+            observations.cols = [...table.querySelector("colgroup").children].map(node => node.className);
+            observations.panelKeys = [...panel.querySelectorAll(".column-item")].map(node => node.dataset.column);
+            observations.checked = [...panel.querySelectorAll("input")].map(node => [node.dataset.column, node.checked]);
+            observations.stored = localStorage.getItem("task-dashboard.column-order");
+            observations.panelHidden = panel.hidden;
+            observations.rowCells = table.tBodies[0].rows[0].cells.length;
+            await tick();
+            observations.afterRefresh = [...table.tHead.rows[0].cells].map(node => node.textContent);
+        """, extra_setup='try { localStorage.setItem("task-dashboard.column-order", '
+                      + json.dumps(stored_order) + '); } catch (error) {}')
+        moved = ["stage", "bot", "title", "started", "updated", "note", "next"]
+        self.assertEqual(first["afterOrder"][0],
+                         ["현재 단계", "봇", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"])
+        self.assertEqual(first["afterOrder"][1], moved)
+        self.assertEqual(json.loads(first["afterOrder"][2]), moved)
+        self.assertIsNone(first["afterOrder"][3])
+        self.assertEqual(first["afterHide"][0], ["봇", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"])
+        self.assertEqual(first["afterHide"][1], moved)
+        self.assertEqual(json.loads(first["afterHide"][2]), moved)
+        self.assertEqual(json.loads(first["afterHide"][3]),
+                         ["bot", "title", "started", "updated", "note", "next"])
+        self.assertEqual(first["afterTab"], first["afterHide"][0])
+        self.assertEqual(first["afterRefresh"][0], first["afterHide"][0])
+        self.assertEqual(json.loads(first["afterRefresh"][1]), moved)
+        self.assertEqual(first["empty"], [5, ["봇", "작업", "시작", "마지막 업데이트", "다음 할 일"]])
+        self.assertEqual(second["headers"],
+                         ["현재 단계", "봇", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"])
+        self.assertEqual(second["cols"],
+                         ["col-stage", "col-bot", "col-title", "col-time", "col-time", "col-note", "col-next"])
+        self.assertEqual(second["panelKeys"], moved)
+        self.assertEqual(dict(second["checked"]),
+                         {"bot": True, "stage": True, "title": True, "started": True, "updated": True, "note": True, "next": True})
+        self.assertEqual(second["stored"], stored_order)
+        self.assertTrue(second["panelHidden"])
+        self.assertEqual(second["rowCells"], 7)
+        self.assertEqual(second["afterRefresh"], second["headers"])
+
+        default_labels = ["봇", "현재 단계", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"]
+        exercise = """
+            const table = document.querySelector(".tasks");
+            const panel = document.getElementById("columns-panel");
+            observations.headers = [...table.tHead.rows[0].cells].map(node => node.textContent);
+            observations.panelKeys = [...panel.querySelectorAll(".column-item")].map(node => node.dataset.column);
+            observations.cols = [...table.querySelector("colgroup").children].map(node => node.className);
+            observations.rowCells = table.tBodies[0].rows[0].cells.length;
+        """
+        cases = [
+            ('try { localStorage.setItem("task-dashboard.column-order", "not-json"); } catch (error) {}',
+             default_labels, ["bot", "stage", "title", "started", "updated", "note", "next"]),
+            ('try { localStorage.setItem("task-dashboard.column-order", "[]"); } catch (error) {}',
+             default_labels, ["bot", "stage", "title", "started", "updated", "note", "next"]),
+            ('try { localStorage.setItem("task-dashboard.column-order", JSON.stringify({bot: true})); } catch (error) {}',
+             default_labels, ["bot", "stage", "title", "started", "updated", "note", "next"]),
+            ('try { localStorage.setItem("task-dashboard.column-order", JSON.stringify(["unknown", 123])); } catch (error) {}',
+             default_labels, ["bot", "stage", "title", "started", "updated", "note", "next"]),
+            ('try { localStorage.setItem("task-dashboard.column-order", JSON.stringify(["next", "unknown", "bot", "next", 123, "stage"])); } catch (error) {}',
+             ["다음 할 일", "봇", "현재 단계", "작업", "시작", "마지막 업데이트", "메모"],
+             ["next", "bot", "stage", "title", "started", "updated", "note"]),
+        ]
+        for extra_setup, expected_labels, expected_keys in cases:
+            with self.subTest(expected=expected_keys):
+                data = self.observe_page(exercise, 1280, extra_setup=extra_setup)
+                self.assertEqual(data["headers"], expected_labels)
+                self.assertEqual(data["panelKeys"], expected_keys)
+                self.assertEqual(data["cols"], ["col-bot", "col-stage", "col-title", "col-time",
+                                                "col-time", "col-note", "col-next"]
+                                 if expected_keys[0] == "bot" else
+                                 ["col-next", "col-bot", "col-stage", "col-title", "col-time",
+                                  "col-time", "col-note"])
+                self.assertEqual(data["rowCells"], 7)
+        data = self.observe_page("""
+            const table = document.querySelector(".tasks");
+            const panel = document.getElementById("columns-panel");
+            const button = document.getElementById("columns-button");
+            const headersOf = () => [...table.tHead.rows[0].cells].map(node => node.textContent);
+            observations.initial = headersOf();
+            button.click();
+            panel.querySelector('.column-item[data-column="bot"] button[data-direction="down"]').click();
+            observations.afterMove = headersOf();
+        """, 1280, extra_setup="""
+            const orderGet = localStorage.getItem.bind(localStorage);
+            const orderSet = localStorage.setItem.bind(localStorage);
+            localStorage.getItem = key => {
+              if (key === "task-dashboard.column-order") throw new Error("denied");
+              return orderGet(key);
+            };
+            localStorage.setItem = function(key, value) {
+              if (key === "task-dashboard.column-order") throw new Error("denied");
+              return orderSet(key, value);
+            };
+        """)
+        self.assertEqual(data["initial"], default_labels)
+        self.assertEqual(data["afterMove"],
+                         ["현재 단계", "봇", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"])
+
+    def test_column_order_header_drag_and_keyboard(self):
+        data = self.observe_page("""
+            const table = document.querySelector(".tasks");
+            const headersOf = () => [...table.tHead.rows[0].cells].map(node => node.textContent);
+            const byLabel = text => [...table.tHead.rows[0].cells].find(node => node.textContent === text);
+            observations.attrs = [byLabel("봇").draggable, byLabel("봇").tabIndex,
+              byLabel("봇").getAttribute("aria-label"),
+              byLabel("봇").getAttribute("aria-description"),
+              byLabel("마지막 업데이트").getAttribute("aria-sort"),
+              byLabel("봇").getAttribute("tabindex")];
+            observations.sorted = table.querySelector('th[aria-sort="descending"]').textContent;
+            const botTh = byLabel("봇");
+            botTh.focus();
+            observations.focused = document.activeElement === botTh;
+            const leftEvent = new KeyboardEvent("keydown", {key: "ArrowLeft", altKey: true, bubbles: true, cancelable: true});
+            botTh.dispatchEvent(leftEvent);
+            observations.atLeftEdge = [headersOf(), leftEvent.defaultPrevented,
+              document.activeElement?.textContent, document.activeElement?.tagName];
+            const plainEvent = new KeyboardEvent("keydown", {key: "ArrowRight", bubbles: true, cancelable: true});
+            document.activeElement.dispatchEvent(plainEvent);
+            observations.plain = [headersOf(), plainEvent.defaultPrevented];
+            const rightEvent = new KeyboardEvent("keydown", {key: "ArrowRight", altKey: true, bubbles: true, cancelable: true});
+            document.activeElement.dispatchEvent(rightEvent);
+            observations.afterRight = [headersOf(), rightEvent.defaultPrevented,
+              document.activeElement?.textContent, document.activeElement?.tagName,
+              localStorage.getItem("task-dashboard.column-order")];
+            const source = byLabel("작업");
+            const target = byLabel("메모");
+            const transfer = {value: "", setData(kind, value) { this.value = value; },
+              getData() { return this.value; }, effectAllowed: "", dropEffect: ""};
+            const fire = (type, node) => {
+              const event = new Event(type, {bubbles: true, cancelable: true});
+              event.dataTransfer = transfer;
+              node.dispatchEvent(event);
+              return event;
+            };
+            const startEvent = fire("dragstart", source);
+            observations.dragging = [source.classList.contains("dragging"), transfer.value];
+            const overEvent = fire("dragover", target);
+            observations.over = [overEvent.defaultPrevented, target.classList.contains("drop-target")];
+            const dropEvent = fire("drop", target);
+            observations.afterDrop = [headersOf(), dropEvent.defaultPrevented,
+              document.activeElement?.textContent, document.activeElement?.tagName,
+              localStorage.getItem("task-dashboard.column-order"),
+              table.querySelector('th[aria-sort="descending"]').textContent];
+            // 드롭 없이 dragend: dragend는 소스 th에서만 발생하므로 대상의
+            // .drop-target 잔류를 확인한다. 대상에 dragleave를 보내지 않는다.
+            const cancelSource = byLabel("봇");
+            const cancelTarget = byLabel("메모");
+            fire("dragstart", cancelSource);
+            fire("dragover", cancelTarget);
+            observations.beforeCancel = [cancelSource.classList.contains("dragging"),
+              cancelTarget.classList.contains("drop-target"),
+              table.querySelectorAll(".drop-target").length];
+            fire("dragend", cancelSource);
+            observations.afterCancel = [cancelSource.classList.contains("dragging"),
+              cancelTarget.classList.contains("drop-target"),
+              table.querySelectorAll(".drop-target").length,
+              headersOf()];
+            fire("dragstart", cancelSource);
+            fire("dragover", cancelTarget);
+            fire("dragleave", cancelTarget);
+            observations.afterLeave = table.querySelectorAll(".drop-target").length;
+            fire("dragend", cancelSource);
+            observations.afterLeaveEnd = table.querySelectorAll(".drop-target").length;
+        """)
+        self.assertEqual(data["attrs"], [True, 0, "봇",
+            "드래그하거나 Alt+왼쪽/오른쪽 화살표 키로 열 순서를 이동합니다.", "descending", "0"])
+        self.assertEqual(data["sorted"], "마지막 업데이트")
+        self.assertTrue(data["focused"])
+        default_labels = ["봇", "현재 단계", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"]
+        self.assertEqual(data["atLeftEdge"][0], default_labels)
+        self.assertTrue(data["atLeftEdge"][1])
+        self.assertEqual(data["atLeftEdge"][2:], ["봇", "TH"])
+        self.assertEqual(data["plain"], [default_labels, False])
+        moved = ["stage", "bot", "title", "started", "updated", "note", "next"]
+        self.assertEqual(data["afterRight"][0],
+                         ["현재 단계", "봇", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"])
+        self.assertTrue(data["afterRight"][1])
+        self.assertEqual(data["afterRight"][2:4], ["봇", "TH"])
+        self.assertEqual(json.loads(data["afterRight"][4]), moved)
+        self.assertEqual(data["dragging"], [True, "title"])
+        self.assertEqual(data["over"], [True, True])
+        dropped = ["stage", "bot", "started", "updated", "title", "note", "next"]
+        self.assertEqual(data["afterDrop"][0],
+                         ["현재 단계", "봇", "시작", "마지막 업데이트", "작업", "메모", "다음 할 일"])
+        self.assertTrue(data["afterDrop"][1])
+        self.assertEqual(data["afterDrop"][2:4], ["작업", "TH"])
+        self.assertEqual(json.loads(data["afterDrop"][4]), dropped)
+        self.assertEqual(data["afterDrop"][5], "마지막 업데이트")
+        self.assertEqual(data["beforeCancel"], [True, True, 1])
+        self.assertEqual(data["afterCancel"][:3], [False, False, 0])
+        self.assertEqual(data["afterCancel"][3], data["afterDrop"][0])
+        self.assertEqual(data["afterLeave"], 0)
+        self.assertEqual(data["afterLeaveEnd"], 0)
+
+    def test_column_order_hidden_and_task_positions(self):
+        data = self.observe_page("""
+            const table = document.querySelector(".tasks");
+            const button = document.getElementById("columns-button");
+            const panel = document.getElementById("columns-panel");
+            const headersOf = () => [...table.tHead.rows[0].cells].map(node => node.textContent);
+            const panelKeys = () => [...panel.querySelectorAll(".column-item")].map(node => node.dataset.column);
+            const moveButton = (key, direction) => panel.querySelector(
+              `.column-item[data-column="${key}"] button[data-direction="${direction}"]`);
+            const byKey = key => panel.querySelector(`input[data-column="${key}"]`);
+            const byLabel = text => [...table.tHead.rows[0].cells].find(node => node.textContent === text);
+            button.click();
+            byKey("stage").click();
+            observations.afterHide = [headersOf(), panelKeys()];
+            moveButton("stage", "down").click();
+            observations.afterHiddenMove = [headersOf(), panelKeys(),
+              localStorage.getItem("task-dashboard.column-order")];
+            byKey("stage").click();
+            observations.afterShow = [headersOf(), panelKeys()];
+            byKey("stage").click();
+            const titleTh = byLabel("작업");
+            titleTh.focus();
+            const altEvent = new KeyboardEvent("keydown", {key: "ArrowRight", altKey: true, bubbles: true, cancelable: true});
+            titleTh.dispatchEvent(altEvent);
+            observations.afterAlt = [headersOf(), panelKeys(), panelKeys().length,
+              document.activeElement?.textContent, document.activeElement?.tagName];
+            byKey("stage").click();
+            observations.afterShow2 = headersOf();
+            moveButton("title", "up").click();
+            moveButton("title", "up").click();
+            observations.titlePos = [headersOf(), panelKeys()];
+            const firstRow = document.querySelectorAll(".task-row")[0];
+            observations.togglePos = [firstRow.cells[1].querySelector(".task-toggle")?.dataset?.taskId,
+              firstRow.cells[0].textContent];
+            const toggle = firstRow.cells[1].querySelector(".task-toggle");
+            toggle.focus();
+            toggle.click();
+            observations.toggled = [table.querySelector(".history") !== null,
+              table.querySelector(".history")?.cells[0].colSpan,
+              document.activeElement?.dataset?.taskId,
+              document.activeElement?.getAttribute?.("aria-expanded")];
+            const toggle2 = () => [...document.querySelectorAll(".task-toggle")]
+              .find(node => node.dataset.taskId === "active");
+            toggle2().click();
+            observations.reclosed = table.querySelector(".history") === null;
+            button.click();
+            byKey("title").click();
+            observations.titleHidden = [headersOf(), panelKeys(), document.querySelectorAll(".task-toggle").length];
+            let row = document.querySelectorAll(".task-row")[0];
+            row.focus();
+            observations.rowFocus = [document.activeElement === row, row.getAttribute("tabindex")];
+            row.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            observations.rowOpen = [table.querySelector(".history") !== null,
+              table.querySelector(".history")?.cells[0].colSpan,
+              document.activeElement?.dataset?.taskId, document.activeElement?.tagName];
+            row = document.querySelectorAll(".task-row")[0];
+            const spaceEvent = new KeyboardEvent("keydown", {key: " ", bubbles: true, cancelable: true});
+            row.dispatchEvent(spaceEvent);
+            observations.rowClose = [table.querySelector(".history") === null, spaceEvent.defaultPrevented,
+              document.activeElement?.dataset?.taskId, document.activeElement?.tagName];
+        """)
+        self.assertEqual(data["afterHide"],
+            [["봇", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"],
+             ["bot", "stage", "title", "started", "updated", "note", "next"]])
+        self.assertEqual(data["afterHiddenMove"][0], data["afterHide"][0])
+        self.assertEqual(data["afterHiddenMove"][1],
+                         ["bot", "title", "stage", "started", "updated", "note", "next"])
+        self.assertEqual(json.loads(data["afterHiddenMove"][2]),
+                         ["bot", "title", "stage", "started", "updated", "note", "next"])
+        self.assertEqual(data["afterShow"][0],
+                         ["봇", "작업", "현재 단계", "시작", "마지막 업데이트", "메모", "다음 할 일"])
+        self.assertEqual(data["afterAlt"][0],
+                         ["봇", "시작", "작업", "마지막 업데이트", "메모", "다음 할 일"])
+        self.assertEqual(data["afterAlt"][1],
+                         ["bot", "started", "stage", "title", "updated", "note", "next"])
+        self.assertEqual(data["afterAlt"][2], 7)
+        self.assertEqual(data["afterAlt"][3:], ["작업", "TH"])
+        self.assertEqual(data["afterShow2"],
+                         ["봇", "시작", "현재 단계", "작업", "마지막 업데이트", "메모", "다음 할 일"])
+        self.assertEqual(data["titlePos"][0],
+                         ["봇", "작업", "시작", "현재 단계", "마지막 업데이트", "메모", "다음 할 일"])
+        self.assertEqual(data["titlePos"][1],
+                         ["bot", "title", "started", "stage", "updated", "note", "next"])
+        self.assertEqual(data["togglePos"], ["active", "Engineering"])
+        self.assertEqual(data["toggled"], [True, 7, "active", "true"])
+        self.assertTrue(data["reclosed"])
+        self.assertEqual(data["titleHidden"][0],
+                         ["봇", "시작", "현재 단계", "마지막 업데이트", "메모", "다음 할 일"])
+        self.assertEqual(data["titleHidden"][1],
+                         ["bot", "title", "started", "stage", "updated", "note", "next"])
+        self.assertEqual(data["titleHidden"][2], 0)
+        self.assertEqual(data["rowFocus"], [True, "0"])
+        self.assertEqual(data["rowOpen"], [True, 6, "active", "TR"])
+        self.assertEqual(data["rowClose"], [True, True, "active", "TR"])

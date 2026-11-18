@@ -156,18 +156,34 @@ PAGE = """<!doctype html>
     .columns-button:hover { background: #edf4f7; }
     .columns-panel {
       position: absolute; right: 0; top: calc(100% + 6px); z-index: 20;
-      min-width: 10.5rem; max-width: min(18rem, calc(100vw - 32px));
+      min-width: 15rem; max-width: min(19rem, calc(100vw - 24px));
       padding: 8px; border: 1px solid var(--line); border-radius: 10px;
       background: white; box-shadow: 0 12px 32px rgb(23 45 64 / .18);
     }
     .columns-panel[hidden] { display: none; }
+    .column-item { display: flex; align-items: center; gap: 4px; }
     .columns-panel label {
       display: flex; align-items: center; gap: 8px; padding: 7px 8px;
       border-radius: 6px; font-size: .9rem; font-weight: 550; cursor: pointer;
+      flex: 1 1 auto; min-width: 0;
     }
+    .columns-panel label span { min-width: 0; overflow-wrap: anywhere; }
     .columns-panel label:hover { background: #f1f5f8; }
-    .columns-panel input { width: 1rem; height: 1rem; accent-color: var(--accent); }
+    .columns-panel input { width: 1rem; height: 1rem; accent-color: var(--accent); flex: 0 0 auto; }
     .columns-panel input:disabled { cursor: not-allowed; opacity: .5; }
+    .column-move {
+      flex: 0 0 28px; width: 28px; height: 28px; padding: 0;
+      border: 1px solid #cbd7df; border-radius: 6px; background: white;
+      font-size: .8rem; line-height: 1;
+    }
+    .column-move:hover:not(:disabled) { background: #edf4f7; }
+    .column-move:disabled { cursor: not-allowed; opacity: .5; }
+    .reset-order {
+      width: 100%; margin-top: 6px; padding: 7px 12px;
+      border: 1px solid #cbd7df; border-radius: 7px; background: white; font-weight: 600;
+    }
+    .reset-order:hover:not(:disabled) { background: #edf4f7; }
+    .reset-order:disabled { cursor: not-allowed; opacity: .5; }
     .scroll { overflow-x: auto; border-radius: 0 0 12px 12px; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left; }
     .tasks { min-width: 1160px; }
@@ -175,6 +191,9 @@ PAGE = """<!doctype html>
     .col-time { width: 13%; } .col-note { width: 18%; } .col-next { width: 15%; }
     th, td { padding: 15px 12px; overflow-wrap: anywhere; }
     th { background: #f2f5f7; color: var(--muted); font-size: .8rem; font-weight: 650; }
+    th[draggable="true"] { cursor: grab; }
+    th.dragging { opacity: .5; }
+    th.drop-target { box-shadow: inset 0 0 0 2px var(--accent); }
     .tasks > thead th { border-block: 1px solid var(--line); }
     td { border-bottom: 1px solid var(--line); font-size: .88rem; line-height: 1.55; vertical-align: top; }
     .tasks > tbody > tr:last-child > td { border-bottom: 0; }
@@ -195,7 +214,7 @@ PAGE = """<!doctype html>
       border-radius: 999px; background: #e4eff7; color: #194f78;
       font: 650 .85rem/1.4 var(--mono); letter-spacing: .01em; overflow-wrap: anywhere;
     }
-    .task-title { display: block; overflow-wrap: anywhere; }
+    .task-title { display: block; overflow-wrap: anywhere; font-weight: 400; }
     .free-text { white-space: pre-wrap; }
     .badge {
       display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
@@ -284,16 +303,38 @@ PAGE = """<!doctype html>
     const columnsButton = document.getElementById("columns-button");
     const columnsPanel = document.getElementById("columns-panel");
     const COLUMNS = [
-      {key: "bot", label: "봇", colClass: "col-bot"},
-      {key: "stage", label: "현재 단계", colClass: "col-stage"},
-      {key: "title", label: "작업", colClass: "col-title"},
-      {key: "started", label: "시작", colClass: "col-time"},
-      {key: "updated", label: "마지막 업데이트", colClass: "col-time", ariaSort: "descending"},
-      {key: "note", label: "메모", colClass: "col-note"},
-      {key: "next", label: "다음 할 일", colClass: "col-next"},
+      {key: "bot", label: "봇", colClass: "col-bot", width: 10,
+        cell: task => textCell(botName(task))},
+      {key: "stage", label: "현재 단계", colClass: "col-stage", width: 8,
+        cell: task => stageCell(task.stage)},
+      {key: "title", label: "작업", colClass: "col-title", width: 23,
+        cell: (task, expanded) => {
+          const cell = element("td");
+          const toggle = element("button", "task-toggle");
+          toggle.type = "button";
+          toggle.dataset.taskId = task.task_id;
+          toggle.setAttribute("aria-expanded", String(expanded));
+          const label = element("span", "task-label");
+          label.append(element("span", "task-id", task.task_id));
+          if (task.title) label.append(element("span", "task-title", task.title));
+          const caret = element("span", "caret");
+          caret.setAttribute("aria-hidden", "true");
+          toggle.append(caret, label);
+          cell.append(toggle);
+          return cell;
+        }},
+      {key: "started", label: "시작", colClass: "col-time", width: 13,
+        cell: task => timeCell(task.started)},
+      {key: "updated", label: "마지막 업데이트", colClass: "col-time", width: 13,
+        ariaSort: "descending", cell: task => timeCell(task.updated)},
+      {key: "note", label: "메모", colClass: "col-note", width: 18,
+        cell: task => textCell(task.note)},
+      {key: "next", label: "다음 할 일", colClass: "col-next", width: 15,
+        cell: task => textCell(task.next)},
     ];
+    const columnsByKey = new Map(COLUMNS.map(column => [column.key, column]));
     const STORAGE_KEY = "task-dashboard.columns";
-    const COLUMN_WIDTHS = {bot: 10, stage: 8, title: 23, started: 13, updated: 13, note: 18, next: 15};
+    const ORDER_STORAGE_KEY = "task-dashboard.column-order";
     let tasks = [];
     let selected = "전체";
     let expandedId = null;
@@ -325,8 +366,65 @@ PAGE = """<!doctype html>
 
     let visible = new Set(loadVisibleColumns());
 
+    function defaultOrder() {
+      return COLUMNS.map(column => column.key);
+    }
+
+    function loadColumnOrder() {
+      let raw;
+      try {
+        raw = localStorage.getItem(ORDER_STORAGE_KEY);
+      } catch {
+        return defaultOrder();
+      }
+      if (raw === null) return defaultOrder();
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return defaultOrder();
+        const seen = new Set();
+        const order = [];
+        for (const value of parsed) {
+          if (typeof value !== "string" || !columnsByKey.has(value) || seen.has(value)) continue;
+          seen.add(value);
+          order.push(value);
+        }
+        // 누락된 키는 기본 상대 순서대로 뒤에 붙인다.
+        for (const key of defaultOrder()) {
+          if (!seen.has(key)) order.push(key);
+        }
+        return order;
+      } catch {
+        return defaultOrder();
+      }
+    }
+
+    let columnOrder = loadColumnOrder();
+    let dragKey = null;
+
+    function saveColumnOrder() {
+      try {
+        localStorage.setItem(ORDER_STORAGE_KEY, JSON.stringify(columnOrder));
+      } catch {
+        // 사생활 모드 등 저장 실패는 무시하고 기본 동작을 유지한다.
+      }
+    }
+
+    function isDefaultOrder() {
+      const order = defaultOrder();
+      return columnOrder.length === order.length
+        && columnOrder.every((key, index) => key === order[index]);
+    }
+
+    function orderedColumns() {
+      return columnOrder.map(key => columnsByKey.get(key)).filter(Boolean);
+    }
+
+    function visibleColumns() {
+      return orderedColumns().filter(column => visible.has(column.key));
+    }
+
     function visibleKeys() {
-      return COLUMNS.map(column => column.key).filter(key => visible.has(key));
+      return visibleColumns().map(column => column.key);
     }
 
     function saveVisibleColumns() {
@@ -422,19 +520,116 @@ PAGE = """<!doctype html>
       botFilter.value = names.has(previous) ? previous : "";
     }
 
+    function focusHeaderCell(key) {
+      const th = headRow.querySelector(`th[data-column="${key}"]`);
+      if (th) th.focus({preventScroll: true});
+    }
+
+    function clearDropTargets() {
+      headRow.querySelectorAll(".drop-target").forEach(node => node.classList.remove("drop-target"));
+    }
+
+    function swapColumnOrder(firstKey, secondKey) {
+      const first = columnOrder.indexOf(firstKey);
+      const second = columnOrder.indexOf(secondKey);
+      if (first < 0 || second < 0 || first === second) return;
+      [columnOrder[first], columnOrder[second]] = [columnOrder[second], columnOrder[first]];
+    }
+
+    function moveColumnTo(sourceKey, targetKey) {
+      if (columnOrder.indexOf(sourceKey) < 0 || columnOrder.indexOf(targetKey) < 0) return;
+      if (sourceKey === targetKey) return;
+      const [moved] = columnOrder.splice(columnOrder.indexOf(sourceKey), 1);
+      columnOrder.splice(columnOrder.indexOf(targetKey), 0, moved);
+    }
+
+    function refreshColumnLayout() {
+      applyColumnsToHeader();
+      buildColumnPanel();
+      render();
+    }
+
     function applyColumnsToHeader() {
       colgroup.replaceChildren();
       headRow.replaceChildren();
-      for (const column of COLUMNS) {
-        if (!visible.has(column.key)) continue;
+      for (const column of visibleColumns()) {
         const col = element("col", column.colClass);
         colgroup.append(col);
         const th = element("th", "", column.label);
         th.scope = "col";
+        th.dataset.column = column.key;
+        th.draggable = true;
+        th.tabIndex = 0;
+        th.setAttribute("aria-label", column.label);
+        th.setAttribute("aria-description", "드래그하거나 Alt+왼쪽/오른쪽 화살표 키로 열 순서를 이동합니다.");
         if (column.ariaSort) th.setAttribute("aria-sort", column.ariaSort);
+        th.addEventListener("keydown", event => {
+          if (!event.altKey) return;
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          const delta = event.key === "ArrowLeft" ? -1 : 1;
+          const columns = visibleColumns();
+          const index = columns.findIndex(entry => entry.key === column.key);
+          const neighbor = columns[index + delta];
+          if (!neighbor) return;
+          swapColumnOrder(column.key, neighbor.key);
+          saveColumnOrder();
+          refreshColumnLayout();
+          focusHeaderCell(column.key);
+        });
+        th.addEventListener("dragstart", event => {
+          dragKey = column.key;
+          th.classList.add("dragging");
+          if (event.dataTransfer) {
+            try {
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", column.key);
+            } catch {
+              // 합성 이벤트 등 dataTransfer가 없는 환경에서는 dragKey로 이어간다.
+            }
+          }
+        });
+        th.addEventListener("dragover", event => {
+          event.preventDefault();
+          if (event.dataTransfer) {
+            try {
+              event.dataTransfer.dropEffect = "move";
+            } catch {
+              // dropEffect 설정 실패는 드롭 자체를 막지 않는다.
+            }
+          }
+          th.classList.add("drop-target");
+        });
+        th.addEventListener("dragleave", () => clearDropTargets());
+        th.addEventListener("drop", event => {
+          event.preventDefault();
+          let sourceKey = dragKey;
+          if (event.dataTransfer) {
+            try {
+              const value = event.dataTransfer.getData("text/plain");
+              if (value) sourceKey = value;
+            } catch {
+              // getData를 읽을 수 없으면 dragstart에서 기록한 키를 쓴다.
+            }
+          }
+          clearDropTargets();
+          dragKey = null;
+          if (!sourceKey || sourceKey === column.key) return;
+          moveColumnTo(sourceKey, column.key);
+          saveColumnOrder();
+          refreshColumnLayout();
+          focusHeaderCell(sourceKey);
+        });
+        // dragend는 드래그 소스 th에서만 발생하므로 헤더 행 전체의
+        // .drop-target을 제거해 대상 th에 남지 않게 한다.
+        th.addEventListener("dragend", () => {
+          th.classList.remove("dragging");
+          clearDropTargets();
+          dragKey = null;
+        });
         headRow.append(th);
       }
-      const total = visibleKeys().reduce((sum, key) => sum + (COLUMN_WIDTHS[key] || 0), 0);
+      const total = visibleColumns().reduce((sum, column) => sum + (column.width || 0), 0);
       // 11.6은 기본 최소 너비 1160px를 열 폭 합 100으로 나눈 값이다.
       table.style.minWidth = Math.max(320, Math.round(total * 11.6)) + "px";
       for (const cell of rows.querySelectorAll("td.empty")) {
@@ -448,17 +643,72 @@ PAGE = """<!doctype html>
       }
     }
 
+    function movePanelColumn(key, delta) {
+      const index = columnOrder.indexOf(key);
+      const target = index + delta;
+      if (index < 0 || target < 0 || target >= columnOrder.length) return;
+      [columnOrder[index], columnOrder[target]] = [columnOrder[target], columnOrder[index]];
+      saveColumnOrder();
+      refreshColumnLayout();
+      const item = columnsPanel.querySelector(`.column-item[data-column="${key}"]`);
+      if (!item) return;
+      const direction = delta < 0 ? "up" : "down";
+      const pressed = item.querySelector(`button[data-direction="${direction}"]`);
+      if (pressed && !pressed.disabled) {
+        pressed.focus({preventScroll: true});
+        return;
+      }
+      const opposite = item.querySelector(`button[data-direction="${direction === "up" ? "down" : "up"}"]`);
+      if (opposite && !opposite.disabled) opposite.focus({preventScroll: true});
+    }
+
     function buildColumnPanel() {
       columnsPanel.replaceChildren();
-      for (const column of COLUMNS) {
+      const ordered = orderedColumns();
+      ordered.forEach((column, index) => {
+        const item = element("div", "column-item");
+        item.dataset.column = column.key;
         const label = element("label");
         const input = document.createElement("input");
         input.type = "checkbox";
         input.checked = visible.has(column.key);
         input.dataset.column = column.key;
         label.append(input, element("span", "", column.label));
-        columnsPanel.append(label);
-      }
+        const up = document.createElement("button");
+        up.type = "button";
+        up.className = "column-move";
+        up.dataset.direction = "up";
+        up.textContent = "▲";
+        up.setAttribute("aria-label", column.label + " 위로 이동");
+        up.disabled = index === 0;
+        up.addEventListener("click", event => {
+          event.stopPropagation();
+          movePanelColumn(column.key, -1);
+        });
+        const down = document.createElement("button");
+        down.type = "button";
+        down.className = "column-move";
+        down.dataset.direction = "down";
+        down.textContent = "▼";
+        down.setAttribute("aria-label", column.label + " 아래로 이동");
+        down.disabled = index === ordered.length - 1;
+        down.addEventListener("click", event => {
+          event.stopPropagation();
+          movePanelColumn(column.key, 1);
+        });
+        item.append(label, up, down);
+        columnsPanel.append(item);
+      });
+      const reset = element("button", "reset-order", "기본 순서로");
+      reset.type = "button";
+      reset.disabled = isDefaultOrder();
+      reset.addEventListener("click", event => {
+        event.stopPropagation();
+        columnOrder = defaultOrder();
+        saveColumnOrder();
+        refreshColumnLayout();
+      });
+      columnsPanel.append(reset);
       updatePanelDisabled();
     }
 
@@ -502,31 +752,10 @@ PAGE = """<!doctype html>
             }
           });
         }
-        const titleCell = element("td");
-        const toggle = element("button", "task-toggle");
-        toggle.type = "button";
-        toggle.dataset.taskId = task.task_id;
-        toggle.setAttribute("aria-expanded", String(expanded));
-        const label = element("span", "task-label");
-        label.append(element("span", "task-id", task.task_id));
-        if (task.title) label.append(element("span", "task-title", task.title));
-        const caret = element("span", "caret");
-        caret.setAttribute("aria-hidden", "true");
-        toggle.append(caret, label);
-        titleCell.append(toggle);
-        const cellByKey = {
-          bot: () => textCell(botName(task)),
-          stage: () => stageCell(task.stage),
-          title: () => titleCell,
-          started: () => timeCell(task.started),
-          updated: () => timeCell(task.updated),
-          note: () => textCell(task.note),
-          next: () => textCell(task.next),
-        };
-        for (const column of COLUMNS) {
-          if (!visible.has(column.key)) continue;
-          row.append(cellByKey[column.key]());
+        for (const column of visibleColumns()) {
+          row.append(column.cell(task, expanded));
         }
+        const toggle = visible.has("title") ? row.querySelector(".task-toggle") : null;
         row.addEventListener("click", () => {
           expandedId = expanded ? null : task.task_id;
           render();
@@ -534,7 +763,7 @@ PAGE = """<!doctype html>
         fragment.append(row);
         if (expanded) {
           const id = "history-" + index;
-          toggle.setAttribute("aria-controls", id);
+          if (toggle) toggle.setAttribute("aria-controls", id);
           fragment.append(historyRow(task, id));
         }
         if (task.task_id === focusedId) restoreFocus = titleHidden ? row : toggle;
