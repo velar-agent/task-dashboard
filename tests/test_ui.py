@@ -271,11 +271,11 @@ class DashboardUITests(unittest.TestCase):
             observations.options = [...select.options].map(option => option.textContent);
             observations.markupNodes = document.querySelectorAll("#bot-filter b, #rows b").length;
             observations.all = record();
-            choose("<b>QA</b>");
+            choose("name:<b>QA</b>");
             observations.qa = record();
             choose("");
             observations.backToAll = record();
-            choose("Engineering");
+            choose("name:Engineering");
             observations.engineering = record();
             document.querySelector('[data-status="완료"]').click();
             observations.done = record();
@@ -286,7 +286,7 @@ class DashboardUITests(unittest.TestCase):
             await tick();
             observations.fallback = record();
             observations.fallbackOptions = [...select.options].map(option => option.textContent);
-            choose("(미지정)");
+            choose("name:(미지정)");
             observations.unnamed = record();
             observations.unnamedCell = document.querySelector(".task-row").cells[0].textContent;
             snapshot = {tasks: [], generated_at: null};
@@ -298,17 +298,98 @@ class DashboardUITests(unittest.TestCase):
         self.assertCountEqual(data["options"][1:], ["(미지정)", "<b>QA</b>", "Engineering"])
         self.assertEqual(data["markupNodes"], 0)
         self.assertEqual(data["all"], ["", [4, 1, 2, 1], ["active", "blocked", "done", "unnamed"]])
-        self.assertEqual(data["qa"], ["<b>QA</b>", [1, 0, 0, 1], ["blocked"]])
+        self.assertEqual(data["qa"], ["name:<b>QA</b>", [1, 0, 0, 1], ["blocked"]])
         self.assertEqual(data["backToAll"], data["all"])
-        self.assertEqual(data["engineering"], ["Engineering", [2, 1, 1, 0], ["active", "done"]])
-        self.assertEqual(data["done"], ["Engineering", [2, 1, 1, 0], ["done"]])
-        self.assertEqual(data["refresh"], ["Engineering", [2, 0, 1, 1], ["done"]])
+        self.assertEqual(data["engineering"], ["name:Engineering", [2, 1, 1, 0], ["active", "done"]])
+        self.assertEqual(data["done"], ["name:Engineering", [2, 1, 1, 0], ["done"]])
+        self.assertEqual(data["refresh"], ["name:Engineering", [2, 0, 1, 1], ["done"]])
         self.assertEqual(data["fallback"], ["", [2, 0, 1, 1], ["unnamed"]])
         self.assertCountEqual(data["fallbackOptions"], ["전체", "(미지정)", "<b>QA</b>"])
-        self.assertEqual(data["unnamed"], ["(미지정)", [1, 0, 1, 0], ["unnamed"]])
+        self.assertEqual(data["unnamed"], ["name:(미지정)", [1, 0, 1, 0], ["unnamed"]])
         self.assertEqual(data["unnamedCell"], "(미지정)")
         self.assertEqual(data["empty"], ["", [0, 0, 0, 0], []])
         self.assertTrue(data["emptyLoaded"])
+
+    def test_bot_filter_groups_by_id_and_search_finds_old_name(self):
+        extra = """
+        const ev = (taskId, botId, botName, recorded, ts) => ({task_id: taskId, bot_id: botId, bot_name: botName,
+          bot: botName, recorded_bot_name: recorded, title: taskId, stage: "코딩", note: "plain", next: "plain", ts});
+        snapshot.tasks = [
+          {task_id: "renamed-a", bot_id: "bot-1", bot_name: "NewBot", bot: "IgnoredBot", title: "A", stage: "코딩",
+           status: "진행 중", started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00",
+           note: "plain", next: "plain", events: [ev("renamed-a", "bot-1", "NewBot", "OldBot", "2026-11-18T12:00:00+09:00")]},
+          {task_id: "renamed-b", bot_id: "bot-1", bot_name: "NewBot", bot: "NewBot", title: "B", stage: "코딩",
+           status: "진행 중", started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T11:00:00+09:00",
+           note: "plain", next: "plain", events: [ev("renamed-b", "bot-1", "NewBot", "NewBot", "2026-11-18T11:00:00+09:00")]},
+          {task_id: "other", bot_id: "bot-2", bot_name: "NewBot", bot: "NewBot", title: "C", stage: "코딩",
+           status: "진행 중", started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T10:00:00+09:00",
+           note: "plain", next: "plain", events: [ev("other", "bot-2", "NewBot", "NewBot", "2026-11-18T10:00:00+09:00")]},
+          {task_id: "solo", bot: "Solo", title: "D", stage: "코딩",
+           status: "진행 중", started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T09:30:00+09:00",
+           note: "plain", next: "plain", events: [{task_id: "solo", bot: "Solo", title: "D", stage: "코딩", note: "plain", next: "plain", ts: "2026-11-18T09:30:00+09:00"}]}
+        ];
+        """
+        data = self.observe_page("""
+            const select = document.getElementById("bot-filter");
+            const ids = () => [...document.querySelectorAll(".task-toggle")].map(node => node.dataset.taskId);
+            const botCellFor = id => {
+              const toggle = [...document.querySelectorAll(".task-toggle")].find(node => node.dataset.taskId === id);
+              return toggle ? toggle.closest("tr").cells[0].textContent : null;
+            };
+            observations.options = [...select.options].map(option => [option.value, option.textContent]);
+            observations.renamedCell = botCellFor("renamed-a");
+            observations.soloCell = botCellFor("solo");
+            const choose = value => { select.value = value; select.dispatchEvent(new Event("change")); };
+            choose("bot-1");
+            observations.bot1Ids = ids();
+            choose("bot-2");
+            observations.bot2Ids = ids();
+            choose("name:Solo");
+            observations.soloIds = ids();
+            choose("bot-1");
+            snapshot.tasks = snapshot.tasks.map(task => task.bot_id === "bot-1"
+              ? {...task, bot_name: "RenamedBot", bot: "RenamedBot",
+                 events: task.events.map(event => ({...event, bot_name: "RenamedBot", bot: "RenamedBot"}))}
+              : task);
+            await tick();
+            observations.afterRename = {
+              value: select.value,
+              options: [...select.options].map(option => [option.value, option.textContent]),
+              ids: ids(),
+              cell: botCellFor("renamed-a"),
+            };
+            const searchEl = document.getElementById("search");
+            const applySearch = query => {
+              searchEl.value = query;
+              searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+              searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            };
+            choose("");
+            applySearch("OldBot");
+            observations.oldNameIds = ids();
+            applySearch("bot-1");
+            observations.idSearchIds = ids();
+            applySearch("RenamedBot");
+            observations.currentNameIds = ids();
+        """, 1280, extra_setup=extra)
+        self.assertEqual(data["options"], [
+            ["", "전체"],
+            ["bot-1", "NewBot"],
+            ["bot-2", "NewBot"],
+            ["name:Solo", "Solo"],
+        ])
+        self.assertEqual(data["renamedCell"], "NewBot")
+        self.assertEqual(data["soloCell"], "Solo")
+        self.assertEqual(data["bot1Ids"], ["renamed-a", "renamed-b"])
+        self.assertEqual(data["bot2Ids"], ["other"])
+        self.assertEqual(data["soloIds"], ["solo"])
+        self.assertEqual(data["afterRename"]["value"], "bot-1")
+        self.assertEqual(data["afterRename"]["ids"], ["renamed-a", "renamed-b"])
+        self.assertEqual(data["afterRename"]["cell"], "RenamedBot")
+        self.assertIn(["bot-1", "RenamedBot"], data["afterRename"]["options"])
+        self.assertEqual(data["oldNameIds"], ["renamed-a"])
+        self.assertEqual(data["idSearchIds"], ["renamed-a", "renamed-b"])
+        self.assertEqual(data["currentNameIds"], ["renamed-a", "renamed-b"])
 
     def test_column_selector_defaults_and_toggle(self):
         exercise = """
@@ -1728,7 +1809,7 @@ class DashboardUITests(unittest.TestCase):
             observations.allIds = ids();
             observations.allCounts = counts();
             observations.allStatus = document.getElementById("search-status").textContent;
-            select.value = "Engineering";
+            select.value = "name:Engineering";
             select.dispatchEvent(new Event("change"));
             observations.engIds = ids();
             observations.engCounts = counts();

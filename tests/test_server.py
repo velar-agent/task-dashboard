@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -20,6 +21,11 @@ def event(task_id, ts, stage, **fields):
 
 class DashboardTests(unittest.TestCase):
     def setUp(self):
+        # 바깥 환경의 BOT_ALIASES_FILE이 기본 경로 테스트에 섞이지 않게 한다.
+        env_patcher = patch.dict(os.environ)
+        env_patcher.start()
+        self.addCleanup(env_patcher.stop)
+        os.environ.pop("BOT_ALIASES_FILE", None)
         directory = tempfile.TemporaryDirectory(dir=Path(__file__).parent)
         self.addCleanup(directory.cleanup)
         self.path = Path(directory.name) / "tasks.jsonl"
@@ -27,6 +33,15 @@ class DashboardTests(unittest.TestCase):
     def write_events(self, *records):
         self.path.write_text("".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records),
                              encoding="utf-8")
+
+    def alias_path(self):
+        return self.path.parent / "bot-aliases.json"
+
+    def write_aliases(self, mapping):
+        self.alias_path().write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+
+    def write_aliases_raw(self, text):
+        self.alias_path().write_text(text, encoding="utf-8")
 
     def get(self, target):
         # 실제 소켓이나 리스너 없이 http.server의 요청 파서와 응답 경로를 거친다.
@@ -229,12 +244,155 @@ class DashboardTests(unittest.TestCase):
         payload = json.loads(body)
         self.assertEqual(datetime.fromisoformat(payload["generated_at"]).utcoffset(), timedelta(hours=9))
         task, = payload["tasks"]
-        self.assertEqual(set(task), {"task_id", "bot", "title", "stage", "status", "started", "updated", "note", "next", "events"})
+        self.assertEqual(set(task), {"task_id", "bot_id", "bot_name", "bot", "title", "stage", "status", "started", "updated", "note", "next", "events"})
         status, _, detail = self.get("/api/tasks/" + quote(task_id, safe="") + "?view=detail")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(detail), task)
         self.assertEqual(len(task["events"]), 2)
         self.assertEqual(self.get("/api/tasks/missing")[0], 404)
+
+    def test_read_event_parses_bot_id_and_names(self):
+        line = json.dumps(event("a", EARLY, "계획", bot_id="bot-1", bot_name="NewBot", bot="OldBot", title="T"),
+                          ensure_ascii=False).encode("utf-8")
+        parsed = server.read_event(line)
+        self.assertEqual(parsed["bot_id"], "bot-1")
+        self.assertEqual(parsed["bot_name"], "NewBot")
+        self.assertEqual(parsed["bot"], "NewBot")
+        self.assertEqual(parsed["recorded_bot_name"], "NewBot")
+        legacy = json.dumps(event("a", EARLY, "계획", bot="OldBot", title="T"), ensure_ascii=False).encode("utf-8")
+        parsed = server.read_event(legacy)
+        self.assertEqual((parsed["bot_id"], parsed["recorded_bot_name"]), ("", "OldBot"))
+        parsed = server.read_event(legacy, {"OldBot": "bot-1"})
+        self.assertEqual((parsed["bot_id"], parsed["recorded_bot_name"]), ("bot-1", "OldBot"))
+        for bad_id in ("bad id", " bot-1", "bot-1 ", "", 123, None, True):
+            record = json.dumps(event("a", EARLY, "계획", bot_id=bad_id, bot_name="Named", title="T"),
+                                ensure_ascii=False).encode("utf-8")
+            self.assertEqual(server.read_event(record)["bot_id"], "", repr(bad_id))
+        # bot_name 우선, 비문자열 bot_name은 bot으로 폴백한다.
+        record = json.dumps(event("a", EARLY, "계획", bot_name=123, bot="Fallback", title="T"),
+                            ensure_ascii=False).encode("utf-8")
+        self.assertEqual(server.read_event(record)["recorded_bot_name"], "Fallback")
+
+    def test_alias_groups_legacy_lines_and_renamed_current_name(self):
+        self.write_aliases({"OldBot": "bot-1"})
+        self.write_events(
+            event("a", EARLY, "계획", bot="OldBot", title="옛 작업"),
+            event("b", LATE, "코딩", bot_id="bot-1", bot_name="NewBot", bot="NewBot", title="새 작업"),
+        )
+        by_id = {task["task_id"]: task for task in server.load_tasks(self.path)}
+        for task in by_id.values():
+            self.assertEqual((task["bot_id"], task["bot_name"], task["bot"]), ("bot-1", "NewBot", "NewBot"))
+        past = by_id["a"]["events"][0]
+        self.assertEqual((past["recorded_bot_name"], past["bot_name"], past["bot"], past["bot_id"]),
+                         ("OldBot", "NewBot", "NewBot", "bot-1"))
+
+    def test_explicit_name_wins_over_later_stale_alias_line(self):
+        self.write_aliases({"OldBot": "bot-1"})
+        self.write_events(
+            event("a", "2026-11-18T09:00:00+09:00", "계획", bot_id="bot-1", bot_name="NewBot", bot="NewBot", title="T"),
+            event("b", "2026-11-18T12:00:00+09:00", "계획", bot="OldBot", title="stale"),
+        )
+        tasks = server.load_tasks(self.path)
+        for task in tasks:
+            self.assertEqual((task["bot_id"], task["bot_name"], task["bot"]), ("bot-1", "NewBot", "NewBot"))
+            for item in task["events"]:
+                self.assertEqual(item["bot_name"], "NewBot")
+        stale = {task["task_id"]: task for task in tasks}["b"]["events"][0]
+        self.assertEqual(stale["recorded_bot_name"], "OldBot")
+
+    def test_inferred_latest_name_when_no_explicit_and_tie_break(self):
+        self.write_aliases({"Old1": "bot-9", "Old2": "bot-9"})
+        self.write_events(
+            event("a", EARLY, "계획", bot="Old1", title="T"),
+            event("a", LATE, "코딩", bot="Old2"),
+        )
+        task, = server.load_tasks(self.path)
+        self.assertEqual((task["bot_id"], task["bot_name"]), ("bot-9", "Old2"))
+        self.assertEqual([item["bot_name"] for item in task["events"]], ["Old2", "Old2"])
+        self.write_events(
+            event("a", EARLY, "계획", bot_id="bot-2", bot_name="First", title="T"),
+            event("a", EARLY, "코딩", bot_id="bot-2", bot_name="Second"),
+        )
+        task, = server.load_tasks(self.path)
+        self.assertEqual(task["bot_name"], "Second")
+
+    def test_aliasless_idless_name_kept_as_is(self):
+        self.write_aliases({})
+        self.write_events(
+            event("a", EARLY, "계획", bot="Solo", title="T"),
+            event("a", LATE, "코딩"),
+        )
+        task, = server.load_tasks(self.path)
+        self.assertEqual((task["bot_id"], task["bot_name"], task["bot"]), ("", "Solo", "Solo"))
+        self.assertEqual([item["recorded_bot_name"] for item in task["events"]], ["Solo", ""])
+
+    def test_invalid_alias_files_warn_and_fall_back_to_empty(self):
+        self.write_events(event("a", EARLY, "계획", bot="OldBot", title="T"))
+        with self.assertLogs(server.LOGGER, "WARNING") as logs:
+            task, = server.load_tasks(self.path)
+        self.assertEqual(len(logs.output), 1)
+        self.assertEqual((task["bot_id"], task["bot_name"]), ("", "OldBot"))
+        self.write_aliases_raw("{ not json")
+        with self.assertLogs(server.LOGGER, "WARNING") as logs:
+            task, = server.load_tasks(self.path)
+        self.assertEqual(len(logs.output), 1)
+        self.assertEqual((task["bot_id"], task["bot_name"]), ("", "OldBot"))
+        self.write_aliases_raw('["not", "a", "dict"]')
+        with self.assertLogs(server.LOGGER, "WARNING") as logs:
+            task, = server.load_tasks(self.path)
+        self.assertEqual(len(logs.output), 1)
+        self.assertEqual((task["bot_id"], task["bot_name"]), ("", "OldBot"))
+        self.write_aliases({"Good": "bot-ok", "BadEmpty": "", "BadSpace": "has space", "BadType": 123})
+        with self.assertLogs(server.LOGGER, "WARNING"):
+            tasks = server.load_tasks(self.path)
+        self.assertEqual(tasks[0]["bot_name"], "OldBot")
+        self.write_events(
+            event("a", EARLY, "계획", bot="Good", title="T"),
+            event("b", EARLY, "계획", bot="BadSpace", title="T2"),
+        )
+        with self.assertLogs(server.LOGGER, "WARNING"):
+            by_id = {task["task_id"]: task for task in server.load_tasks(self.path)}
+        self.assertEqual((by_id["a"]["bot_id"], by_id["a"]["bot_name"]), ("bot-ok", "Good"))
+        self.assertEqual((by_id["b"]["bot_id"], by_id["b"]["bot_name"]), ("", "BadSpace"))
+
+    def test_aliases_env_and_explicit_path(self):
+        custom = self.path.parent / "custom-aliases.json"
+        custom.write_text(json.dumps({"Legacy": "bot-env"}, ensure_ascii=False), encoding="utf-8")
+        self.write_events(event("a", EARLY, "계획", bot="Legacy", title="T"))
+        with patch.dict("os.environ", {"BOT_ALIASES_FILE": str(custom)}):
+            task, = server.load_tasks(self.path)
+        self.assertEqual((task["bot_id"], task["bot_name"]), ("bot-env", "Legacy"))
+        with patch.dict("os.environ", {"BOT_ALIASES_FILE": str(custom)}):
+            with self.assertLogs(server.LOGGER, "WARNING"):
+                task, = server.load_tasks(self.path, aliases_path=str(self.alias_path()))
+        self.assertEqual((task["bot_id"], task["bot_name"]), ("", "Legacy"))
+
+    def test_task_bot_inheritance_uses_current_name_and_id(self):
+        self.write_aliases({})
+        self.write_events(
+            event("a", EARLY, "계획", bot_id="b1", bot_name="Alpha", title="T"),
+            event("a", LATE, "코딩"),
+            event("b", EARLY, "계획", bot_id="b1", bot_name="Alpha", title="T2"),
+            event("b", LATE, "코딩", bot_id="b2", bot_name="Beta"),
+        )
+        by_id = {task["task_id"]: task for task in server.load_tasks(self.path)}
+        self.assertEqual((by_id["a"]["bot_id"], by_id["a"]["bot_name"], by_id["a"]["bot"]), ("b1", "Alpha", "Alpha"))
+        self.assertEqual((by_id["b"]["bot_id"], by_id["b"]["bot_name"], by_id["b"]["bot"]), ("b2", "Beta", "Beta"))
+
+    def test_detail_api_includes_bot_identity_fields(self):
+        self.write_aliases({"OldBot": "bot-1"})
+        self.write_events(
+            event("renamed", EARLY, "계획", bot="OldBot", title="옛 이름 작업"),
+            event("renamed", LATE, "코딩", bot_id="bot-1", bot_name="NewBot", bot="NewBot"),
+        )
+        status, _, body = self.get("/api/tasks/renamed")
+        self.assertEqual(status, 200)
+        detail = json.loads(body)
+        self.assertEqual((detail["bot_id"], detail["bot_name"], detail["bot"]), ("bot-1", "NewBot", "NewBot"))
+        self.assertEqual(detail["events"][0]["recorded_bot_name"], "OldBot")
+        self.assertEqual(detail["events"][0]["bot_name"], "NewBot")
+        status, _, listed = self.get("/api/tasks")
+        self.assertEqual(json.loads(listed)["tasks"][0], detail)
 
     def test_page_health_and_read_errors(self):
         self.path.mkdir()

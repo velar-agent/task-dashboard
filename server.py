@@ -12,6 +12,7 @@ from urllib.parse import unquote
 
 
 DEFAULT_TASKS_FILE = "/workspace/task-status/tasks.jsonl"
+DEFAULT_ALIASES_FILENAME = "bot-aliases.json"
 KST = timezone(timedelta(hours=9), "KST")
 STAGES = ("접수", "계획", "코딩", "리뷰", "커밋", "배포", "점검", "완료", "막힘")
 LOGGER = logging.getLogger(__name__)
@@ -60,7 +61,49 @@ def _natural_task_id_key(task_id):
     return key
 
 
-def read_event(line):
+def _is_valid_bot_id(value):
+    return isinstance(value, str) and bool(value) and not any(ch.isspace() for ch in value)
+
+
+def _resolve_aliases_path(path, aliases_path):
+    if aliases_path is not None:
+        return aliases_path
+    env = os.environ.get("BOT_ALIASES_FILE")
+    if env:
+        return env
+    directory = os.path.dirname(str(path))
+    return os.path.join(directory or ".", DEFAULT_ALIASES_FILENAME)
+
+
+def _load_aliases_file(aliases_path):
+    try:
+        with open(aliases_path, "r", encoding="utf-8") as stream:
+            data = json.load(stream)
+    except FileNotFoundError:
+        LOGGER.warning("별칭 파일이 없어 빈 별칭으로 동작합니다: %s", aliases_path)
+        return {}
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        LOGGER.warning("별칭 파일을 읽을 수 없어 빈 별칭으로 동작합니다: %s (%s)", aliases_path, exc)
+        return {}
+    if not isinstance(data, dict):
+        LOGGER.warning("별칭 파일 형식이 올바르지 않아 빈 별칭으로 동작합니다: %s", aliases_path)
+        return {}
+    aliases = {}
+    for name, bot_id in data.items():
+        if _is_valid_bot_id(bot_id):
+            aliases[name] = bot_id
+        else:
+            LOGGER.warning("별칭 항목을 무시합니다: %r -> %r", name, bot_id)
+    return aliases
+
+
+def load_bot_aliases(path, aliases_path=None):
+    return _load_aliases_file(_resolve_aliases_path(path, aliases_path))
+
+
+def _parse_event(line, aliases):
+    if not isinstance(aliases, dict):
+        aliases = {}
     record = json.loads(line.decode("utf-8"))
     if not isinstance(record, dict):
         raise ValueError("이벤트는 JSON 객체여야 합니다.")
@@ -69,7 +112,25 @@ def read_event(line):
         value = record.get(key)
         return value if isinstance(value, str) and value.strip() else ""
 
-    event = {key: field(key) for key in ("task_id", "bot", "title", "stage", "note", "next", "ts")}
+    raw_bot_id = record.get("bot_id")
+    explicit = raw_bot_id if _is_valid_bot_id(raw_bot_id) else ""
+    recorded = field("bot_name") or field("bot")
+    alias_id = aliases.get(recorded, "")
+    if not _is_valid_bot_id(alias_id):
+        alias_id = ""
+    resolved = explicit or alias_id
+    event = {
+        "task_id": field("task_id"),
+        "bot_id": resolved,
+        "bot_name": recorded,
+        "bot": recorded,
+        "recorded_bot_name": recorded,
+        "title": field("title"),
+        "stage": field("stage"),
+        "note": field("note"),
+        "next": field("next"),
+        "ts": field("ts"),
+    }
     if not event["task_id"] or event["stage"] not in STAGES:
         raise ValueError("작업 ID 또는 단계가 올바르지 않습니다.")
     ts = event["ts"]
@@ -77,18 +138,31 @@ def read_event(line):
     if moment.tzinfo is None:
         raise ValueError("시각에 시간대가 필요합니다.")
     event["ts"] = moment.astimezone(KST).isoformat()
+    return event, explicit
+
+
+def read_event(line, aliases=None):
+    event, _explicit = _parse_event(line, aliases if isinstance(aliases, dict) else {})
     return event
 
 
-def load_tasks(path):
+def load_tasks(path, aliases_path=None):
     """유효한 이벤트를 시각순으로 접고 상태 그룹→task_id 자연 정렬→updated 내림차순으로 반환한다.
 
     상태 그룹 순서는 진행 중, 막힘, 완료이며 완료는 항상 마지막이다. 같은
     상태 그룹 안에서는 task_id를 자연 정렬(숫자는 수치 비교, 대소문자 무시)로
     오름차순 정렬하고, task_id 비교가 동률이면 마지막 업데이트를 내림차순으로
     정렬한다. Python 자연 정렬 키는 클라이언트의 JS 로케일 비교를 근사한다.
+
+    봇은 ``bot_id`` 기준으로 묶으며, id가 없는 줄은 별칭 파일
+    (``aliases_path`` 또는 기본 ``bot-aliases.json``)이 기록 당시 이름에
+    주는 id로 묶는다. 현재 이름은 명시적 id 이벤트 중 가장 최근
+    (시각, 동률은 파일 뒤쪽) 이름이 별칭 추론 이름보다 항상 우선하며,
+    명시적 이벤트가 없으면 추론 이벤트 중 가장 최근 이름이다.
     """
+    aliases = _load_aliases_file(_resolve_aliases_path(path, aliases_path))
     groups = {}
+    all_meta = []
     skipped = 0
     first_invalid = None
     try:
@@ -101,29 +175,64 @@ def load_tasks(path):
             if not line.strip():
                 continue
             try:
-                event = read_event(line)
+                event, explicit = _parse_event(line, aliases)
             except (ValueError, OverflowError, RecursionError):
                 skipped += 1
                 if first_invalid is None:
                     first_invalid = number
                 continue
             groups.setdefault(event["task_id"], []).append(event)
+            all_meta.append((event, explicit, number))
     if skipped:
         LOGGER.warning("%s에서 잘못된 이벤트 %d줄을 건너뜁니다 (첫 오류 %d행).",
                        path, skipped, first_invalid)
+
+    by_key = {}
+    for event, explicit, number in all_meta:
+        bot_id = event["bot_id"]
+        key = ("id", bot_id) if bot_id else ("name", event["recorded_bot_name"])
+        by_key.setdefault(key, []).append((event, explicit, number))
+
+    def latest_name(entries):
+        candidates = [(event["ts"], number, event["recorded_bot_name"])
+                      for event, _explicit, number in entries
+                      if event["recorded_bot_name"]]
+        if not candidates:
+            return ""
+        return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+    current_by_key = {}
+    for key, entries in by_key.items():
+        if key[0] == "name":
+            current_by_key[key] = key[1]
+        else:
+            explicit_entries = [entry for entry in entries if entry[1]]
+            inferred_entries = [entry for entry in entries if not entry[1]]
+            current_by_key[key] = latest_name(explicit_entries) or latest_name(inferred_entries)
+
+    for event, _explicit, _number in all_meta:
+        bot_id = event["bot_id"]
+        key = ("id", bot_id) if bot_id else ("name", event["recorded_bot_name"])
+        current = current_by_key.get(key, event["recorded_bot_name"])
+        event["bot_name"] = current
+        event["bot"] = current
 
     tasks = []
     for task_id, events in groups.items():
         # 같은 오프셋으로 정규화된 ISO 시각이다. 안정 정렬이 동률의 파일 순서를 보존한다.
         events.sort(key=itemgetter("ts"))
-        title = bot = ""
+        title = bot = bot_id = ""
         for event in events:
             title = event["title"] or title
-            bot = event["bot"] or bot
+            if event["bot"]:
+                bot = event["bot"]
+                bot_id = event["bot_id"]
         latest = events[-1]
         stage = latest["stage"]
         tasks.append({
             "task_id": task_id,
+            "bot_id": bot_id,
+            "bot_name": bot,
             "bot": bot,
             "title": title,
             "stage": stage,
@@ -705,7 +814,7 @@ PAGE = """<!doctype html>
 
     function eventSearchableText(event) {
       if (!event || typeof event !== "object") return "";
-      const fields = [event.task_id, event.title, event.bot, event.stage, event.note, event.next, eventTsText(event.ts)];
+      const fields = [event.task_id, event.title, event.bot_name, event.bot, event.recorded_bot_name, event.bot_id, event.stage, event.note, event.next, eventTsText(event.ts)];
       return fields.map(value => typeof value === "string" ? value : value == null ? "" : String(value)).join(" ");
     }
 
@@ -921,8 +1030,15 @@ PAGE = """<!doctype html>
     }
 
     function botName(task) {
-      const name = typeof task.bot === "string" ? task.bot.trim() : "";
+      const raw = (task && task.bot_name) || (task && task.bot) || "";
+      const name = typeof raw === "string" ? raw.trim() : "";
       return name || "(미지정)";
+    }
+
+    function botKey(task) {
+      const id = task && typeof task.bot_id === "string" ? task.bot_id : "";
+      if (id) return id;
+      return "name:" + botName(task);
     }
 
     const STATUS_RANK = {"진행 중": 0, "막힘": 1, "완료": 2};
@@ -968,14 +1084,19 @@ PAGE = """<!doctype html>
 
     function updateBotOptions() {
       const previous = botFilter.value;
-      const names = new Set(tasks.map(botName));
+      const byKey = new Map();
+      for (const task of tasks) {
+        const key = botKey(task);
+        if (!byKey.has(key)) byKey.set(key, botName(task));
+      }
       botFilter.replaceChildren(botFilter.firstElementChild);
-      for (const name of [...names].sort((a, b) => a.localeCompare(b, "ko"))) {
+      const entries = [...byKey.entries()].sort((a, b) => a[1].localeCompare(b[1], "ko") || a[0].localeCompare(b[0], "ko"));
+      for (const [key, name] of entries) {
         const option = element("option", "", name);
-        option.value = name;
+        option.value = key;
         botFilter.append(option);
       }
-      botFilter.value = names.has(previous) ? previous : "";
+      botFilter.value = byKey.has(previous) ? previous : "";
     }
 
     function focusHeaderCell(key) {
@@ -1237,7 +1358,7 @@ PAGE = """<!doctype html>
     function render() {
       const keywords = searchKeywordsFor(searchQuery);
       const searchActive = keywords.length > 0;
-      const botTasks = botFilter.value ? tasks.filter(task => botName(task) === botFilter.value) : tasks;
+      const botTasks = botFilter.value ? tasks.filter(task => botKey(task) === botFilter.value) : tasks;
       const searchFiltered = searchActive
         ? botTasks.filter(task => matchingEventsForTask(task, keywords).length > 0)
         : botTasks;

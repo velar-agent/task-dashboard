@@ -390,6 +390,67 @@ class VmApiTests(unittest.TestCase):
             status, _, detail = req_json(port, "GET", "/api/tasks/persist")
             self.assertEqual(detail, {"task_id": "persist"})
 
+    def test_ingest_preserves_bot_identity_fields(self):
+        # vm/server.py는 접힌 JSON을 그대로 저장하므로 bot_id/bot_name/
+        # recorded_bot_name이 목록과 상세 조회에서 그대로 보여야 한다.
+        task = {
+            "task_id": "renamed",
+            "bot_id": "bot-1",
+            "bot_name": "NewBot",
+            "bot": "NewBot",
+            "title": "이름 변경",
+            "stage": "코딩",
+            "status": "진행 중",
+            "started": "2026-11-18T09:00:00+09:00",
+            "updated": "2026-11-18T10:00:00+09:00",
+            "note": "",
+            "next": "",
+            "events": [
+                {
+                    "task_id": "renamed",
+                    "bot_id": "bot-1",
+                    "bot_name": "NewBot",
+                    "bot": "NewBot",
+                    "recorded_bot_name": "OldBot",
+                    "title": "이름 변경",
+                    "stage": "계획",
+                    "note": "",
+                    "next": "",
+                    "ts": "2026-11-18T09:00:00+09:00",
+                },
+                {
+                    "task_id": "renamed",
+                    "bot_id": "bot-1",
+                    "bot_name": "NewBot",
+                    "bot": "NewBot",
+                    "recorded_bot_name": "NewBot",
+                    "title": "",
+                    "stage": "코딩",
+                    "note": "확인",
+                    "next": "",
+                    "ts": "2026-11-18T10:00:00+09:00",
+                },
+            ],
+        }
+        snapshot = {"tasks": [task], "generated_at": "2026-11-18T12:00:00+09:00"}
+        with run_server(self.data_file, SECRET) as port:
+            auth = {"Authorization": f"Bearer {SECRET}"}
+            status, _, body = req_json(
+                port,
+                "PUT",
+                "/api/ingest",
+                body=json.dumps(snapshot, ensure_ascii=False),
+                headers=auth,
+            )
+            self.assertEqual((status, body), (200, {"ok": True, "count": 1}))
+            status, _, listed = req_json(port, "GET", "/api/tasks")
+            self.assertEqual(status, 200)
+            self.assertEqual(listed["tasks"], [task])
+            status, _, detail = req_json(port, "GET", "/api/tasks/" + quote(task["task_id"], safe=""))
+            self.assertEqual((status, detail), (200, task))
+        raw = json.loads(self.data_file.read_text(encoding="utf-8"))
+        self.assertEqual(raw["tasks"], [task])
+
     def test_corrupt_file_is_safe(self):
         self.data_file.parent.mkdir(parents=True, exist_ok=True)
         self.data_file.write_bytes(b"\xff\xfe not json {")
