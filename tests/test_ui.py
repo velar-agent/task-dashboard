@@ -1181,6 +1181,30 @@ class DashboardUITests(unittest.TestCase):
         # history mini-cards: stacked block cells.
         self.assertEqual(data["histDisplay"], "block")
 
+    def test_intake_stage_badge_renders_with_intake_class(self):
+        data = self.observe_page("""
+            snapshot.tasks = [...snapshot.tasks,
+              {...task("intake", "Engineering", "진행 중"), stage: "접수", title: "막 받은 요청"}];
+            await tick();
+            const toggle = [...document.querySelectorAll(".task-toggle")]
+              .find(node => node.dataset.taskId === "intake");
+            const badge = toggle.closest(".task-row").querySelector(".badge");
+            const style = getComputedStyle(badge);
+            observations.intakeBadge = [badge.className, badge.textContent,
+              style.backgroundColor, style.color];
+            observations.intakeIsIntake = badge.classList.contains("intake");
+            const activeBadge = [...document.querySelectorAll(".task-toggle")]
+              .find(node => node.dataset.taskId === "active")
+              .closest(".task-row").querySelector(".badge");
+            observations.activeBadgeClass = activeBadge.className;
+        """)
+        self.assertEqual(data["intakeBadge"][0], "badge intake")
+        self.assertEqual(data["intakeBadge"][1], "접수")
+        self.assertEqual(data["intakeBadge"][2], "rgb(236, 232, 251)")
+        self.assertEqual(data["intakeBadge"][3], "rgb(74, 58, 153)")
+        self.assertTrue(data["intakeIsIntake"])
+        self.assertNotIn("intake", data["activeBadgeClass"])
+
     def test_mobile_columns_backdrop_toggles_with_panel(self):
         exercise = """
             const button = document.getElementById("columns-button");

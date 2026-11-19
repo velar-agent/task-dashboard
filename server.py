@@ -12,7 +12,7 @@ from urllib.parse import unquote
 
 DEFAULT_TASKS_FILE = "/workspace/task-status/tasks.jsonl"
 KST = timezone(timedelta(hours=9), "KST")
-STAGES = ("계획", "코딩", "리뷰", "커밋", "배포", "점검", "완료", "막힘")
+STAGES = ("접수", "계획", "코딩", "리뷰", "커밋", "배포", "점검", "완료", "막힘")
 LOGGER = logging.getLogger(__name__)
 
 
@@ -236,6 +236,7 @@ PAGE = """<!doctype html>
       background: #e3effb; color: #215a8a;
     }
     .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .badge.intake { background: #ece8fb; color: #4a3a99; }
     .badge.check { background: #fff1d1; color: #80550d; }
     .badge.done { background: #def2e6; color: #206442; }
     .badge.blocked { background: #fbe5e5; color: #a12f36; }
@@ -605,7 +606,7 @@ PAGE = """<!doctype html>
     }
 
     function stageCell(stage) {
-      const styles = {완료: "done", 막힘: "blocked", 계획: "check", 리뷰: "check", 점검: "check"};
+      const styles = {접수: "intake", 완료: "done", 막힘: "blocked", 계획: "check", 리뷰: "check", 점검: "check"};
       const cell = element("td");
       cell.append(element("span", "badge " + (styles[stage] || ""), stage));
       return cell;

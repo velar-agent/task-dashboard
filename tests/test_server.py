@@ -57,7 +57,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(task["events"][-1]["title"], "")
 
     def test_status_for_each_stage_and_latest_update_order(self):
-        stages = ["계획", "코딩", "리뷰", "커밋", "배포", "점검", "완료", "막힘"]
+        stages = ["접수", "계획", "코딩", "리뷰", "커밋", "배포", "점검", "완료", "막힘"]
         records = [event(stage, EARLY, stage) for stage in stages]
         records += [
             event("코딩", "2026-11-18T07:30:00.1Z", "코딩"),
@@ -71,6 +71,18 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(tasks[0]["updated"], "2026-11-18T16:30:00.100000+09:00")
         statuses = {task["task_id"]: task["status"] for task in tasks}
         self.assertEqual(statuses, {s: s if s in ("완료", "막힘") else "진행 중" for s in stages})
+
+    def test_intake_then_plan_folds_into_one_in_progress_task(self):
+        self.write_events(
+            event("a", EARLY, "접수", bot="Engineering", title="막 받은 요청"),
+            event("a", LATE, "계획", note="계획 수립", next="코드 작성"),
+        )
+        task, = server.load_tasks(self.path)
+        self.assertEqual(task["task_id"], "a")
+        self.assertEqual([e["stage"] for e in task["events"]], ["접수", "계획"])
+        self.assertEqual((task["stage"], task["status"]), ("계획", "진행 중"))
+        self.assertEqual((task["started"], task["updated"]), (EARLY, LATE))
+        self.assertEqual((task["bot"], task["title"]), ("Engineering", "막 받은 요청"))
 
     def test_invalid_records_do_not_change_state_or_hide_later_lines(self):
         self.write_events(
