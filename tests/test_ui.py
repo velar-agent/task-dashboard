@@ -240,7 +240,7 @@ class DashboardUITests(unittest.TestCase):
                     ["마지막 업데이트", "col-time", "2026-11-18 12:00"],
                     ["메모", "col-note", "구현 중"], ["다음 할 일", "col-next", "리뷰 요청"],
                 ])
-                self.assertEqual(data["taskOrder"], ["active", "기능 구현", 0, 0, ["task-id"], 0, "active", None])
+                self.assertEqual(data["taskOrder"], ["active", "active — 기능 구현", 0, 0, ["task-id"], 0, "active", None])
                 font_family, font_size, color, background, radius, border, weight, border_width, padding, spacing = data["taskIdStyle"]
                 self.assertEqual(weight, "700")
                 self.assertEqual(background, "rgba(0, 0, 0, 0)")
@@ -249,8 +249,8 @@ class DashboardUITests(unittest.TestCase):
                 self.assertEqual(radius, "0px")
                 self.assertEqual(padding, "0px")
                 self.assertNotIn("monospace", font_family.lower())
-                self.assertEqual(data["unnamedTask"], ["unnamed", 1, 0, "unnamed", None, False])
-                self.assertEqual(data["markupTask"], ["<i>x</i>", "<b>y</b>", 0, 0])
+                self.assertEqual(data["unnamedTask"], ["unnamed", 1, 0, "unnamed", "unnamed", True])
+                self.assertEqual(data["markupTask"], ["<i>x</i>", "<i>x</i> — <b>y</b>", 0, 0])
                 self.assertEqual(data["openHistoryTitle"], ["active", "기능 구현"])
                 self.assertEqual(data["open"], ["active", "true", True, 7])
                 self.assertEqual(data["closed"], ["active", "false", True])
@@ -752,7 +752,7 @@ class DashboardUITests(unittest.TestCase):
                 data = self.observe_page(exercise, width)
                 self.assertEqual(data["idWeight"], "700")
                 self.assertEqual(data["noTaskTitle"], 0)
-                self.assertEqual(data["idTitle"], "기능 구현")
+                self.assertEqual(data["idTitle"], "active — 기능 구현")
                 font_family, font_size, color, background, radius, border, weight, border_width, padding, spacing = data["idStyle"]
                 self.assertEqual(weight, "700")
                 self.assertEqual(background, "rgba(0, 0, 0, 0)")
@@ -1148,7 +1148,7 @@ class DashboardUITests(unittest.TestCase):
             observations.theadClip = getComputedStyle(table.tHead).clip;
             observations.theadInDom = table.tHead !== null && table.tHead.rows[0].cells.length === 7;
             observations.scrollOverflowX = getComputedStyle(document.querySelector(".scroll")).overflowX;
-            snapshot.tasks = [{task_id: "a".repeat(80), bot: "B".repeat(60),
+            snapshot.tasks = [{task_id: "task-dashboard-keyword-".repeat(4).slice(0, 80), bot: "B".repeat(60),
               title: "긴 제목", stage: "코딩", status: "진행 중",
               started: stamp, updated: stamp, note: "n".repeat(120), next: "m".repeat(120), events: []}];
             await tick();
@@ -1713,7 +1713,7 @@ class DashboardUITests(unittest.TestCase):
         self.assertEqual(data["titleSearchIds"], ["work-1"])
         self.assertEqual(data["rowTitleNodes"], 0)
         self.assertEqual(data["rowCellText"], "work-1")
-        self.assertEqual(data["idTitleAttr"], "Alpha Title")
+        self.assertEqual(data["idTitleAttr"], "work-1 — Alpha Title")
         self.assertEqual(data["autoHeading"], "일치한 이벤트 1개 (전체 2개)")
         self.assertEqual(data["autoSummary"], ["work-1", "Alpha Title"])
         self.assertEqual(data["autoNotes"], ["alpha event note"])
@@ -2884,7 +2884,7 @@ class DashboardUITests(unittest.TestCase):
               document.activeElement?.dataset?.taskId, document.activeElement?.tagName,
               document.querySelector(".status-section .task-row")?.getAttribute("aria-controls")];
         """, 1280, extra_setup=extra)
-        self.assertEqual(data["tag"], ["active", "기능 구현", 0, 0, "700"])
+        self.assertEqual(data["tag"], ["active", "active — 기능 구현", 0, 0, "700"])
         self.assertEqual(data["open"], ["active", "true", True, "history-0", 7, "SECTION", "active", "기능 구현", "이벤트 이력"])
         self.assertEqual(data["closed"], ["active", "false", 0])
         self.assertEqual(data["searchHist"]["ids"], ["history-0", "history-1", "history-2"])
@@ -2932,7 +2932,7 @@ class DashboardUITests(unittest.TestCase):
               rowDisplay: getComputedStyle(row).display,
               labels: [...row.cells].map(node => node.dataset.label),
             };
-            snapshot.tasks = [{task_id: "a".repeat(80), bot: "B".repeat(60),
+            snapshot.tasks = [{task_id: "task-dashboard-keyword-".repeat(4).slice(0, 80), bot: "B".repeat(60),
               title: "긴 제목", stage: "코딩", status: "진행 중",
               started: stamp, updated: stamp, note: "n".repeat(120), next: "m".repeat(120), events: []}];
             await tick();
@@ -3252,6 +3252,124 @@ class DashboardUITests(unittest.TestCase):
         self.assertTrue(data["is640"])
         self.assertGreaterEqual(data["rect"]["height"], 44)
 
+    def test_task_id_single_line_ellipsis_and_tooltip(self):
+        desktop = self.observe_page("""
+            const table = document.querySelector(".tasks");
+            observations.columnsSum = COLUMNS.reduce((sum, column) => sum + column.width, 0);
+            observations.columnsWidths = COLUMNS.map(column => [column.key, column.width]);
+            const tableW = table.getBoundingClientRect().width;
+            observations.tableW = tableW;
+            const col = table.querySelector("col.col-title");
+            observations.colRatio = tableW ? col.getBoundingClientRect().width / tableW : 0;
+            const th = table.querySelector('th[data-column="title"]');
+            observations.thRatio = th && tableW ? th.getBoundingClientRect().width / tableW : 0;
+            const firstId = document.querySelector(".task-id");
+            const firstStyle = getComputedStyle(firstId);
+            observations.firstComputed = [firstStyle.whiteSpace, firstStyle.textOverflow, firstStyle.overflow,
+              firstStyle.overflowWrap, firstStyle.wordBreak, firstStyle.fontWeight];
+            observations.baselineH = firstId.offsetHeight;
+            observations.tooltipActive = firstId.getAttribute("title");
+            observations.tooltipActiveHas = firstId.hasAttribute("title");
+            observations.tooltipActiveText = firstId.textContent;
+            const unnamedId = [...document.querySelectorAll(".task-id")].find(node => node.textContent === "unnamed");
+            observations.tooltipUnnamed = unnamedId.getAttribute("title");
+            observations.tooltipUnnamedHas = unnamedId.hasAttribute("title");
+            const LONG29 = "task-dashboard-keyword-search";
+            snapshot.tasks = [{task_id: LONG29, bot: "Engineering", title: "제목", stage: "코딩", status: "진행 중", started: stamp, updated: stamp, note: "x", next: "y", events: []}];
+            await tick();
+            const node29 = document.querySelector(".task-id");
+            observations.long29 = {
+              len: node29.textContent.length, text: node29.textContent,
+              scroll: node29.scrollWidth, client: node29.clientWidth,
+              offsetH: node29.offsetHeight,
+              title: node29.getAttribute("title"),
+              computed: [getComputedStyle(node29).whiteSpace, getComputedStyle(node29).textOverflow, getComputedStyle(node29).overflow,
+                getComputedStyle(node29).overflowWrap, getComputedStyle(node29).wordBreak],
+            };
+            const caret29 = node29.closest(".task-toggle").querySelector(".caret");
+            observations.caret29 = {width: caret29.getBoundingClientRect().width,
+              flex: getComputedStyle(caret29).flex, shrink: getComputedStyle(caret29).flexShrink};
+            observations.toggle29Min = getComputedStyle(node29.closest(".task-toggle")).minWidth;
+            observations.label29Min = getComputedStyle(node29.closest(".task-label")).minWidth;
+            const LONG80 = "a".repeat(80);
+            snapshot.tasks = [{task_id: LONG80, bot: "Engineering", title: "긴 제목", stage: "코딩", status: "진행 중", started: stamp, updated: stamp, note: "x", next: "y", events: []}];
+            await tick();
+            const node80 = document.querySelector(".task-id");
+            observations.long80 = {
+              len: node80.textContent.length,
+              scroll: node80.scrollWidth, client: node80.clientWidth,
+              offsetH: node80.offsetHeight,
+              title: node80.getAttribute("title"),
+              titleHasFull: node80.getAttribute("title").includes(node80.textContent),
+              computed: [getComputedStyle(node80).whiteSpace, getComputedStyle(node80).textOverflow, getComputedStyle(node80).overflow],
+            };
+        """, 1280)
+        self.assertEqual(desktop["columnsSum"], 100)
+        self.assertEqual(dict(desktop["columnsWidths"]), {"bot": 9, "stage": 8, "title": 28, "started": 12, "updated": 12, "note": 17, "next": 14})
+        self.assertGreaterEqual(desktop["colRatio"], 0.27)
+        self.assertGreaterEqual(desktop["thRatio"], 0.27)
+        self.assertEqual(desktop["firstComputed"][0], "nowrap")
+        self.assertEqual(desktop["firstComputed"][1], "ellipsis")
+        self.assertEqual(desktop["firstComputed"][2], "hidden")
+        self.assertEqual(desktop["firstComputed"][3], "normal")
+        self.assertEqual(desktop["firstComputed"][4], "normal")
+        self.assertEqual(desktop["firstComputed"][5], "700")
+        self.assertEqual(desktop["tooltipActive"], "active — 기능 구현")
+        self.assertTrue(desktop["tooltipActiveHas"])
+        self.assertEqual(desktop["tooltipActiveText"], "active")
+        self.assertEqual(desktop["tooltipUnnamed"], "unnamed")
+        self.assertTrue(desktop["tooltipUnnamedHas"])
+        self.assertEqual(desktop["long29"]["len"], 29)
+        self.assertEqual(desktop["long29"]["text"], "task-dashboard-keyword-search")
+        self.assertEqual(desktop["long29"]["computed"], ["nowrap", "ellipsis", "hidden", "normal", "normal"])
+        self.assertLessEqual(desktop["long29"]["scroll"], desktop["long29"]["client"])
+        self.assertEqual(desktop["long29"]["offsetH"], desktop["baselineH"])
+        self.assertEqual(desktop["long29"]["title"], "task-dashboard-keyword-search — 제목")
+        self.assertEqual(desktop["long80"]["len"], 80)
+        self.assertGreater(desktop["long80"]["scroll"], desktop["long80"]["client"])
+        self.assertEqual(desktop["long80"]["offsetH"], desktop["baselineH"])
+        self.assertTrue(desktop["long80"]["titleHasFull"])
+        self.assertEqual(desktop["long80"]["computed"], ["nowrap", "ellipsis", "hidden"])
+        self.assertGreater(desktop["caret29"]["width"], 0)
+        self.assertIn("0 0", desktop["caret29"]["flex"])
+        self.assertEqual(desktop["caret29"]["shrink"], "0")
+        self.assertEqual(desktop["toggle29Min"], "0px")
+        self.assertEqual(desktop["label29Min"], "0px")
+        mobile = self.observe_page("""
+            const idNode = document.querySelector(".task-id");
+            const style = getComputedStyle(idNode);
+            observations.mobileComputed = [style.whiteSpace, style.overflowWrap, style.wordBreak, style.textOverflow, style.overflow];
+            observations.is640 = matchMedia("(max-width: 640px)").matches;
+            observations.inner = window.innerWidth;
+            const LONG29 = "task-dashboard-keyword-search";
+            snapshot.tasks = [{task_id: LONG29, bot: "Engineering", title: "제목", stage: "코딩", status: "진행 중", started: stamp, updated: stamp, note: "x", next: "y", events: []}];
+            await tick();
+            const n29 = document.querySelector(".task-id");
+            const range = document.createRange(); range.selectNodeContents(n29);
+            observations.mobile29 = {scroll: n29.scrollWidth, client: n29.clientWidth, offsetH: n29.offsetHeight,
+              rects: [...range.getClientRects()].length};
+            const LONGHYPHEN = "task-dashboard-keyword-".repeat(4).slice(0, 80);
+            snapshot.tasks = [{task_id: LONGHYPHEN, bot: "Engineering", title: "제목", stage: "코딩", status: "진행 중", started: stamp, updated: stamp, note: "x", next: "y", events: []}];
+            await tick();
+            const nh = document.querySelector(".task-id");
+            const range2 = document.createRange(); range2.selectNodeContents(nh);
+            observations.mobileHyphen = {len: nh.textContent.length, scroll: nh.scrollWidth, client: nh.clientWidth,
+              offsetH: nh.offsetHeight, rectCount: [...range2.getClientRects()].length,
+              docScroll: document.documentElement.scrollWidth, noOverflow: document.documentElement.scrollWidth <= window.innerWidth};
+        """, 390)
+        self.assertTrue(mobile["is640"])
+        self.assertEqual(mobile["mobileComputed"][0], "normal")
+        self.assertEqual(mobile["mobileComputed"][1], "normal")
+        self.assertEqual(mobile["mobileComputed"][2], "normal")
+        self.assertNotEqual(mobile["mobileComputed"][3], "ellipsis")
+        self.assertNotEqual(mobile["mobileComputed"][0], "nowrap")
+        self.assertLessEqual(mobile["mobile29"]["scroll"], mobile["mobile29"]["client"])
+        self.assertEqual(mobile["mobile29"]["rects"], 1)
+        self.assertEqual(mobile["mobileHyphen"]["len"], 80)
+        self.assertLessEqual(mobile["mobileHyphen"]["scroll"], mobile["mobileHyphen"]["client"])
+        self.assertGreater(mobile["mobileHyphen"]["rectCount"], 1)
+        self.assertTrue(mobile["mobileHyphen"]["noOverflow"])
+
 
 class MobileStaticTests(unittest.TestCase):
     def test_viewport_meta(self):
@@ -3328,3 +3446,16 @@ class MobileStaticTests(unittest.TestCase):
         self.assertIn("status-fold-all", server.PAGE)
         self.assertIn('id="status-toolbar"', server.PAGE)
         self.assertIn("status-panel-", server.PAGE)
+
+    def test_columns_widths_sum_and_css_consistency(self):
+        widths = re.findall(r'key: "(bot|stage|title|started|updated|note|next)",[^}]*width: (\d+)', server.PAGE)
+        self.assertEqual(len(widths), 7)
+        total = sum(int(w) for _, w in widths)
+        self.assertEqual(total, 100)
+        mapping = dict(widths)
+        self.assertEqual(mapping, {"bot": "9", "stage": "8", "title": "28", "started": "12", "updated": "12", "note": "17", "next": "14"})
+        self.assertIn(".col-bot { width: 9%; }", server.PAGE)
+        self.assertIn(".col-title { width: 28%; }", server.PAGE)
+        self.assertIn(".col-time { width: 12%; }", server.PAGE)
+        self.assertIn(".col-note { width: 17%; }", server.PAGE)
+        self.assertIn(".col-next { width: 14%; }", server.PAGE)

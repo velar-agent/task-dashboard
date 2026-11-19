@@ -400,8 +400,8 @@ PAGE = """<!doctype html>
     .scroll { overflow-x: auto; border-radius: 0 0 12px 12px; }
     table { width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left; }
     .tasks { min-width: 1160px; }
-    .col-bot { width: 10%; } .col-stage { width: 8%; } .col-title { width: 23%; }
-    .col-time { width: 13%; } .col-note { width: 18%; } .col-next { width: 15%; }
+    .col-bot { width: 9%; } .col-stage { width: 8%; } .col-title { width: 28%; }
+    .col-time { width: 12%; } .col-note { width: 17%; } .col-next { width: 14%; }
     th, td { padding: 15px 12px; overflow-wrap: anywhere; }
     th { background: #f2f5f7; color: var(--muted); font-size: .8rem; font-weight: 650; }
     th[draggable="true"] { cursor: grab; }
@@ -418,14 +418,15 @@ PAGE = """<!doctype html>
     .task-toggle {
       display: flex; align-items: baseline; gap: 9px; padding: 0;
       border: 0; background: transparent; text-align: left; font-weight: 650;
+      min-width: 0; max-width: 100%;
     }
     .caret {
-      flex: 0 0 7px; height: 7px; border: solid var(--accent); border-width: 0 1.5px 1.5px 0;
+      flex: 0 0 7px; flex-shrink: 0; height: 7px; border: solid var(--accent); border-width: 0 1.5px 1.5px 0;
       transform: translateY(-2px) rotate(-45deg);
     }
     .expanded .caret { transform: translateY(-4px) rotate(45deg); }
-    .task-label { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; min-width: 0; }
-    .task-id { display: block; font-weight: 700; overflow-wrap: anywhere; }
+    .task-label { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; min-width: 0; max-width: 100%; }
+    .task-id { display: block; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; word-break: normal; min-width: 0; max-width: 100%; }
     .free-text { white-space: pre-wrap; overflow-wrap: anywhere; }
     .columns-backdrop { display: none; }
     .columns-backdrop[hidden] { display: none; }
@@ -563,7 +564,7 @@ PAGE = """<!doctype html>
       .tasks tbody tr.task-row > td[data-column="title"]::before,
       .tasks tbody tr.task-row > td.title-cell::before { content: none; display: none; }
       .task-toggle { width: 100%; min-height: 44px; touch-action: manipulation; }
-      .task-id { overflow-wrap: anywhere; }
+      .task-id { overflow-wrap: normal; word-break: normal; white-space: normal; overflow: visible; text-overflow: clip; }
       .free-text { white-space: pre-wrap; overflow-wrap: anywhere; }
       .tasks td.empty {
         display: block; text-align: left; padding: 12px 14px; margin: 10px 10px;
@@ -691,11 +692,11 @@ PAGE = """<!doctype html>
     const statusFoldAll = statusToolbar ? statusToolbar.querySelector(".status-fold-all") : null;
     const mainScroll = table.closest(".scroll");
     const COLUMNS = [
-      {key: "bot", label: "봇", colClass: "col-bot", width: 10,
+      {key: "bot", label: "봇", colClass: "col-bot", width: 9,
         cell: (task, expanded, keywords) => textCell(botName(task), keywords)},
       {key: "stage", label: "현재 단계", colClass: "col-stage", width: 8,
         cell: (task, expanded, keywords) => stageCell(task.stage, keywords)},
-      {key: "title", label: "작업", colClass: "col-title", width: 23,
+      {key: "title", label: "작업", colClass: "col-title", width: 28,
         cell: (task, expanded, keywords) => {
           const cell = element("td", "title-cell");
           const toggle = element("button", "task-toggle");
@@ -704,7 +705,7 @@ PAGE = """<!doctype html>
           toggle.setAttribute("aria-expanded", String(expanded));
           const label = element("span", "task-label");
           const idSpan = element("span", "task-id");
-          if (task.title) idSpan.setAttribute("title", task.title);
+          idSpan.setAttribute("title", task.title ? task.task_id + " — " + task.title : task.task_id);
           appendHighlightedText(idSpan, task.task_id, keywords);
           label.append(idSpan);
           const caret = element("span", "caret");
@@ -713,13 +714,13 @@ PAGE = """<!doctype html>
           cell.append(toggle);
           return cell;
         }},
-      {key: "started", label: "시작", colClass: "col-time", width: 13,
+      {key: "started", label: "시작", colClass: "col-time", width: 12,
         cell: (task, expanded, keywords) => timeCell(task.started, keywords)},
-      {key: "updated", label: "마지막 업데이트", colClass: "col-time", width: 13,
+      {key: "updated", label: "마지막 업데이트", colClass: "col-time", width: 12,
         ariaSort: "descending", cell: (task, expanded, keywords) => timeCell(task.updated, keywords)},
-      {key: "note", label: "메모", colClass: "col-note", width: 18,
+      {key: "note", label: "메모", colClass: "col-note", width: 17,
         cell: (task, expanded, keywords) => textCell(task.note, keywords)},
-      {key: "next", label: "다음 할 일", colClass: "col-next", width: 15,
+      {key: "next", label: "다음 할 일", colClass: "col-next", width: 14,
         cell: (task, expanded, keywords) => textCell(task.next, keywords)},
     ];
     const columnsByKey = new Map(COLUMNS.map(column => [column.key, column]));
