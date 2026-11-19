@@ -331,6 +331,15 @@ PAGE = """<!doctype html>
     .status-section { margin-top: 16px; }
     .status-heading { margin: 0; padding: 14px 14px 0; font-size: 1rem; display: flex; align-items: center; gap: 8px; }
     .status-heading .count { font-size: .85rem; }
+    .status-toggle { display: flex; align-items: center; gap: 8px; font: inherit; color: inherit; background: transparent; border: 0; padding: 0; text-align: left; cursor: pointer; flex: 1 1 auto; }
+    .status-toggle:focus-visible { outline: 3px solid #2985bd; outline-offset: 3px; }
+    .status-caret { flex: 0 0 auto; }
+    .status-section.collapsed .status-heading { padding-bottom: 14px; }
+    .status-toolbar { display: flex; justify-content: flex-end; padding: 8px 14px 0; }
+    .status-toolbar[hidden] { display: none; }
+    .status-fold-all { background: transparent; border: 0; color: var(--muted); font-size: .85rem; padding: 4px 8px; cursor: pointer; }
+    .status-fold-all:hover { color: var(--ink); text-decoration: underline; }
+    .status-fold-all:focus-visible { outline: 3px solid #2985bd; outline-offset: 3px; }
     .visually-hidden {
       position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
       overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%);
@@ -489,6 +498,8 @@ PAGE = """<!doctype html>
       .columns-button { width: 100%; min-height: 44px; touch-action: manipulation; }
       .view-toggle { width: 100%; margin-left: 0; }
       .view-button { flex: 1 1 0; min-height: 44px; touch-action: manipulation; }
+      .status-toggle { min-height: 44px; touch-action: manipulation; width: 100%; }
+      .status-fold-all { min-height: 44px; touch-action: manipulation; }
       .columns-panel {
         position: fixed; left: 0; right: 0; bottom: 0; top: auto;
         width: auto; min-width: 0; max-width: none;
@@ -651,6 +662,7 @@ PAGE = """<!doctype html>
           <tbody id="rows"><tr><td class="empty" colspan="7">작업을 불러오는 중입니다.</td></tr></tbody>
         </table>
       </div>
+      <div id="status-toolbar" class="status-toolbar" hidden><button type="button" class="status-fold-all">모두 접기</button></div>
       <div id="status-sections" class="status-sections" hidden></div>
     </section>
   </main>
@@ -675,6 +687,8 @@ PAGE = """<!doctype html>
     const viewListButton = document.getElementById("view-list");
     const viewStatusButton = document.getElementById("view-status");
     const statusSections = document.getElementById("status-sections");
+    const statusToolbar = document.getElementById("status-toolbar");
+    const statusFoldAll = statusToolbar ? statusToolbar.querySelector(".status-fold-all") : null;
     const mainScroll = table.closest(".scroll");
     const COLUMNS = [
       {key: "bot", label: "봇", colClass: "col-bot", width: 10,
@@ -712,6 +726,8 @@ PAGE = """<!doctype html>
     const STORAGE_KEY = "task-dashboard.columns";
     const ORDER_STORAGE_KEY = "task-dashboard.column-order";
     const VIEW_STORAGE_KEY = "task-dashboard.view";
+    const FOLDS_STORAGE_KEY = "task-dashboard.folds";
+    const STATUS_LABELS = ["진행 중", "막힘", "완료"];
     let tasks = [];
     let selected = "전체";
     let expandedId = null;
@@ -720,6 +736,51 @@ PAGE = """<!doctype html>
     let searchDebounce = null;
     let viewMode = loadViewMode();
     let loadFailedMessage = null;
+    let folded = loadFolds();
+
+    function loadFolds() {
+      let raw;
+      try {
+        raw = localStorage.getItem(FOLDS_STORAGE_KEY);
+      } catch {
+        return new Set();
+      }
+      if (raw === null) return new Set();
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Set();
+        const next = new Set();
+        for (const [key, value] of Object.entries(parsed)) {
+          if (value === true) next.add(key);
+        }
+        return next;
+      } catch {
+        return new Set();
+      }
+    }
+
+    function saveFolds() {
+      try {
+        const next = {};
+        for (const label of STATUS_LABELS) {
+          if (folded.has(label)) next[label] = true;
+        }
+        localStorage.setItem(FOLDS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // 사생활 모드 등 저장 실패는 무시하고 기본 동작을 유지한다.
+      }
+    }
+
+    function updateFoldAllButton(visibleLabels) {
+      if (!statusToolbar || !statusFoldAll) return;
+      if (viewMode !== "status" || !visibleLabels.length) {
+        statusToolbar.hidden = true;
+        return;
+      }
+      statusToolbar.hidden = false;
+      const allFolded = visibleLabels.every(label => folded.has(label));
+      statusFoldAll.textContent = allFolded ? "모두 펼치기" : "모두 접기";
+    }
 
     function defaultVisibleKeys() {
       return COLUMNS.map(column => column.key);
@@ -808,6 +869,7 @@ PAGE = """<!doctype html>
       const isStatus = viewMode === "status";
       if (mainScroll) mainScroll.hidden = isStatus;
       if (statusSections) statusSections.hidden = !isStatus;
+      if (statusToolbar && !isStatus) statusToolbar.hidden = true;
     }
 
     function setViewMode(mode) {
@@ -1561,40 +1623,66 @@ PAGE = """<!doctype html>
         fragment.append(emptyRow(searchActive ? "일치하는 이벤트가 없습니다." : (selected === "전체" ? "등록된 작업이 없습니다." : "이 상태의 작업이 없습니다.")));
       }
       if (statusSections) statusSections.replaceChildren();
+      if (statusToolbar) statusToolbar.hidden = true;
       rows.replaceChildren(fragment);
       if (restoreFocus) restoreFocus.focus({preventScroll: true});
     }
 
     function renderStatusMode(matching, keywords, searchActive) {
       const focusedId = document.activeElement?.dataset.taskId;
+      const active = document.activeElement;
+      const focusedStatus = active && active.classList && active.classList.contains("status-toggle") ? active.dataset.status : null;
       const titleHidden = !visible.has("title");
       let restoreFocus;
+      let restoreStatusFocus = null;
       const groups = orderedTasksForStatus(matching);
-      const labels = ["진행 중", "막힘", "완료"];
+      const labels = STATUS_LABELS;
       const allowed = selected === "전체" ? labels : [selected];
       statusSections.replaceChildren();
       rows.replaceChildren();
       let historySeq = 0;
-      for (const label of labels) {
+      const visibleLabels = [];
+      for (let index = 0; index < labels.length; index += 1) {
+        const label = labels[index];
         if (!allowed.includes(label)) continue;
         const list = groups[label] || [];
         if (!list.length) continue;
-        const section = element("section", "status-section");
+        visibleLabels.push(label);
+        const isFolded = folded.has(label);
+        const section = element("section", isFolded ? "status-section collapsed" : "status-section");
         section.setAttribute("data-status", label);
         const heading = element("h2", "status-heading");
-        heading.append(document.createTextNode(label + " "));
+        const toggle = element("button", "status-toggle");
+        toggle.type = "button";
+        toggle.dataset.status = label;
+        const panelId = "status-panel-" + index;
+        toggle.setAttribute("aria-expanded", String(!isFolded));
+        toggle.setAttribute("aria-controls", panelId);
+        const caret = element("span", "status-caret", isFolded ? "▸" : "▾");
+        caret.setAttribute("aria-hidden", "true");
+        const labelSpan = element("span", "status-label", label);
         const countSpan = element("span", "count");
         countSpan.textContent = String(list.length);
-        heading.append(countSpan);
+        toggle.append(caret, labelSpan, document.createTextNode(" "), countSpan);
+        toggle.addEventListener("click", () => {
+          if (folded.has(label)) folded.delete(label);
+          else folded.add(label);
+          saveFolds();
+          render();
+        });
+        if (label === focusedStatus) restoreStatusFocus = toggle;
+        heading.append(toggle);
         const built = createStatusTable(label);
+        built.wrapper.id = panelId;
+        if (isFolded) built.wrapper.hidden = true;
         const localFragment = document.createDocumentFragment();
         for (const task of list) {
           const historyId = "history-" + historySeq;
           historySeq += 1;
-          const {row, history, toggle} = taskRowAndHistory(task, keywords, searchActive, historyId);
+          const {row, history, toggle: taskToggle} = taskRowAndHistory(task, keywords, searchActive, historyId);
           localFragment.append(row);
           if (history) localFragment.append(history);
-          if (task.task_id === focusedId) restoreFocus = titleHidden ? row : toggle;
+          if (task.task_id === focusedId) restoreFocus = titleHidden ? row : taskToggle;
         }
         built.tbodyEl.replaceChildren(localFragment);
         section.append(heading, built.wrapper);
@@ -1603,7 +1691,9 @@ PAGE = """<!doctype html>
       if (!statusSections.childElementCount) {
         statusSections.append(element("p", "empty", searchActive ? "일치하는 이벤트가 없습니다." : (selected === "전체" ? "등록된 작업이 없습니다." : "이 상태의 작업이 없습니다.")));
       }
-      if (restoreFocus) restoreFocus.focus({preventScroll: true});
+      updateFoldAllButton(visibleLabels);
+      if (restoreStatusFocus) restoreStatusFocus.focus({preventScroll: true});
+      else if (restoreFocus) restoreFocus.focus({preventScroll: true});
     }
 
     function render() {
@@ -1625,6 +1715,7 @@ PAGE = """<!doctype html>
           searchStatus.hidden = true;
           searchStatus.textContent = "";
         }
+        if (statusToolbar) statusToolbar.hidden = true;
         if (viewMode === "status") {
           const loadingMessage = loadFailedMessage || "작업을 불러오는 중입니다.";
           const current = statusSections.querySelector(".empty");
@@ -1716,6 +1807,7 @@ PAGE = """<!doctype html>
         if (!loaded) {
           loadFailedMessage = "작업 목록을 불러올 수 없습니다.";
           rows.replaceChildren(emptyRow(loadFailedMessage));
+          if (statusToolbar) statusToolbar.hidden = true;
           if (viewMode === "status") {
             statusSections.replaceChildren(element("p", "empty", loadFailedMessage));
           }
@@ -1770,6 +1862,19 @@ PAGE = """<!doctype html>
     for (const button of viewButtons) {
       button.addEventListener("click", () => {
         setViewMode(button.dataset.view);
+      });
+    }
+    if (statusFoldAll) {
+      statusFoldAll.addEventListener("click", () => {
+        const visibleLabels = [...document.querySelectorAll(".status-section")].map(node => node.getAttribute("data-status"));
+        const allFolded = visibleLabels.length > 0 && visibleLabels.every(label => folded.has(label));
+        if (allFolded) {
+          for (const label of STATUS_LABELS) folded.delete(label);
+        } else {
+          for (const label of STATUS_LABELS) folded.add(label);
+        }
+        saveFolds();
+        render();
       });
     }
     updateViewToggle();

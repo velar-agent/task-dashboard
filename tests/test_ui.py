@@ -2445,7 +2445,7 @@ class DashboardUITests(unittest.TestCase):
               statusSections.hidden, localStorage.getItem("task-dashboard.view"),
               [...document.querySelectorAll(".status-section")].map(node => node.getAttribute("data-status")),
               [...document.querySelectorAll(".status-heading")].map(node => [
-                node.tagName, node.textContent, node.querySelector(".count")?.textContent]),
+                node.tagName, node.querySelector(".status-label")?.textContent + " " + node.querySelector(".count")?.textContent, node.querySelector(".count")?.textContent]),
               document.querySelectorAll(".status-section table.tasks").length,
               document.querySelectorAll("table.tasks").length,
               [...document.querySelectorAll(".status-section")].map(section => [
@@ -2600,7 +2600,7 @@ class DashboardUITests(unittest.TestCase):
             };
             observations.sections = [...document.querySelectorAll(".status-section")].map(node => node.getAttribute("data-status"));
             observations.headings = [...document.querySelectorAll(".status-heading")].map(node => [
-              node.textContent, node.querySelector(".count")?.textContent, node.tagName]);
+              node.querySelector(".status-label")?.textContent + " " + node.querySelector(".count")?.textContent, node.querySelector(".count")?.textContent, node.tagName]);
             observations.activeOrder = secIds("진행 중");
             observations.blockedOrder = secIds("막힘");
             observations.doneOrder = secIds("완료");
@@ -2626,7 +2626,7 @@ class DashboardUITests(unittest.TestCase):
             observations.sections = [...document.querySelectorAll(".status-section")].map(node => node.getAttribute("data-status"));
             observations.noBlocked = document.querySelector('.status-section[data-status="막힘"]');
             observations.noBlockedHidden = document.querySelector('[data-status="막힘"][hidden]');
-            observations.headings = [...document.querySelectorAll(".status-heading")].map(node => node.textContent);
+            observations.headings = [...document.querySelectorAll(".status-heading")].map(node => node.querySelector(".status-label")?.textContent + " " + node.querySelector(".count")?.textContent);
         """, 1280, extra_setup='snapshot.tasks = snapshot.tasks.filter(task => task.status !== "막힘");')
         self.assertEqual(data["sections"], ["진행 중", "완료"])
         self.assertIsNone(data["noBlocked"])
@@ -2666,7 +2666,7 @@ class DashboardUITests(unittest.TestCase):
             };
             const ids = () => [...document.querySelectorAll(".status-section .task-toggle")].map(node => node.dataset.taskId);
             const sections = () => [...document.querySelectorAll(".status-section")].map(node => node.getAttribute("data-status"));
-            const headings = () => [...document.querySelectorAll(".status-heading")].map(node => node.textContent);
+            const headings = () => [...document.querySelectorAll(".status-heading")].map(node => node.querySelector(".status-label")?.textContent + " " + node.querySelector(".count")?.textContent);
             const filterCounts = () => [...document.querySelectorAll(".filters .count")].map(node => Number(node.textContent));
             const select = document.getElementById("bot-filter");
             observations.allSections = sections();
@@ -2961,6 +2961,297 @@ class DashboardUITests(unittest.TestCase):
         self.assertTrue(data["afterLong"]["noOverflow"])
         self.assertLessEqual(data["afterLong"]["scrollWidth"], data["view"]["innerWidth"])
 
+    def test_status_fold_toggle_collapses_and_expands(self):
+        data = self.observe_page("""
+            document.getElementById("view-status").click();
+            const toggle = () => [...document.querySelectorAll(".status-toggle")].find(node => node.dataset.status === "완료");
+            const first = toggle();
+            observations.controls = [...document.querySelectorAll(".status-toggle")].map(node => node.getAttribute("aria-controls"));
+            observations.initial = {
+              tag: first.tagName, type: first.getAttribute("type"),
+              expanded: first.getAttribute("aria-expanded"),
+              controls: first.getAttribute("aria-controls"),
+              wrapperHidden: document.getElementById(first.getAttribute("aria-controls"))?.hidden,
+              caret: first.querySelector(".status-caret")?.textContent,
+              caretHidden: first.querySelector(".status-caret")?.getAttribute("aria-hidden"),
+              count: first.querySelector(".count")?.textContent,
+              label: first.querySelector(".status-label")?.textContent,
+              h2Tag: first.closest("h2")?.tagName,
+              buttonInHeading: first.parentElement?.tagName,
+            };
+            first.focus();
+            first.click();
+            const collapsed = toggle();
+            observations.collapsed = {
+              expanded: collapsed.getAttribute("aria-expanded"),
+              wrapperHidden: document.getElementById(collapsed.getAttribute("aria-controls"))?.hidden,
+              wrapperDisplay: getComputedStyle(document.getElementById(collapsed.getAttribute("aria-controls"))).display,
+              caret: collapsed.querySelector(".status-caret")?.textContent,
+              count: collapsed.querySelector(".count")?.textContent,
+              controlsResolves: document.getElementById(collapsed.getAttribute("aria-controls")) !== null,
+              tag: collapsed.tagName, type: collapsed.getAttribute("type"),
+            };
+            observations.othersCollapsed = [...document.querySelectorAll(".status-toggle")].map(node => [node.dataset.status, node.getAttribute("aria-expanded")]);
+            collapsed.click();
+            const reopened = toggle();
+            observations.reopened = {
+              expanded: reopened.getAttribute("aria-expanded"),
+              wrapperHidden: document.getElementById(reopened.getAttribute("aria-controls"))?.hidden,
+              caret: reopened.querySelector(".status-caret")?.textContent,
+              count: reopened.querySelector(".count")?.textContent,
+            };
+        """, 1280)
+        self.assertEqual(len(set(data["controls"])), 3)
+        self.assertEqual(data["initial"]["tag"], "BUTTON")
+        self.assertEqual(data["initial"]["type"], "button")
+        self.assertEqual(data["initial"]["expanded"], "true")
+        self.assertIn(data["initial"]["controls"], data["controls"])
+        self.assertFalse(data["initial"]["wrapperHidden"])
+        self.assertEqual(data["initial"]["caret"], "▾")
+        self.assertEqual(data["initial"]["caretHidden"], "true")
+        self.assertEqual(data["initial"]["count"], "2")
+        self.assertEqual(data["initial"]["label"], "완료")
+        self.assertEqual(data["initial"]["h2Tag"], "H2")
+        self.assertEqual(data["initial"]["buttonInHeading"], "H2")
+        self.assertEqual(data["collapsed"]["expanded"], "false")
+        self.assertTrue(data["collapsed"]["wrapperHidden"])
+        self.assertEqual(data["collapsed"]["wrapperDisplay"], "none")
+        self.assertEqual(data["collapsed"]["caret"], "▸")
+        self.assertEqual(data["collapsed"]["count"], "2")
+        self.assertTrue(data["collapsed"]["controlsResolves"])
+        self.assertEqual(data["collapsed"]["tag"], "BUTTON")
+        self.assertEqual(data["collapsed"]["type"], "button")
+        self.assertEqual(dict(data["othersCollapsed"]), {"진행 중": "true", "막힘": "true", "완료": "false"})
+        self.assertEqual(data["reopened"]["expanded"], "true")
+        self.assertFalse(data["reopened"]["wrapperHidden"])
+        self.assertEqual(data["reopened"]["caret"], "▾")
+        self.assertEqual(data["reopened"]["count"], "2")
+
+    def test_status_fold_persistence(self):
+        data = self.observe_page("""
+            document.getElementById("view-status").click();
+            const toggle = () => [...document.querySelectorAll(".status-toggle")].find(node => node.dataset.status === "완료");
+            toggle().click();
+            observations.stored = localStorage.getItem("task-dashboard.folds");
+            observations.storedJson = JSON.parse(observations.stored);
+            observations.collapsed = toggle().getAttribute("aria-expanded");
+        """, 1280)
+        self.assertEqual(data["storedJson"], {"완료": True})
+        self.assertEqual(data["collapsed"], "false")
+        extra = 'try { localStorage.setItem("task-dashboard.folds", \'{"완료": true}\'); } catch (error) {} try { localStorage.setItem("task-dashboard.view", "status"); } catch (error) {}'
+        data = self.observe_page("""
+            observations.toggles = [...document.querySelectorAll(".status-toggle")].map(node => [
+              node.dataset.status, node.getAttribute("aria-expanded"),
+              document.getElementById(node.getAttribute("aria-controls"))?.hidden,
+              node.querySelector(".status-caret")?.textContent, node.querySelector(".count")?.textContent]);
+            observations.sections = [...document.querySelectorAll(".status-section")].map(node => node.getAttribute("data-status"));
+            observations.toolbarHidden = document.getElementById("status-toolbar")?.hidden;
+            observations.foldAllText = document.querySelector(".status-fold-all")?.textContent;
+            await tick();
+            observations.afterTick = [...document.querySelectorAll(".status-toggle")].map(node => [node.dataset.status, node.getAttribute("aria-expanded")]);
+        """, 1280, extra_setup=extra)
+        self.assertEqual(data["sections"], ["진행 중", "막힘", "완료"])
+        by_status = {row[0]: row for row in data["toggles"]}
+        self.assertEqual(by_status["완료"][1], "false")
+        self.assertTrue(by_status["완료"][2])
+        self.assertEqual(by_status["완료"][3], "▸")
+        self.assertEqual(by_status["진행 중"][1], "true")
+        self.assertFalse(by_status["진행 중"][2])
+        self.assertEqual(by_status["막힘"][1], "true")
+        self.assertFalse(by_status["막힘"][2])
+        self.assertFalse(data["toolbarHidden"])
+        self.assertEqual(data["foldAllText"], "모두 접기")
+        self.assertEqual(dict(data["afterTick"]), {"진행 중": "true", "막힘": "true", "완료": "false"})
+
+    def test_status_fold_fallback(self):
+        exercise = """
+            observations.toggles = [...document.querySelectorAll(".status-toggle")].map(node => [
+              node.dataset.status, node.getAttribute("aria-expanded"),
+              document.getElementById(node.getAttribute("aria-controls"))?.hidden,
+              node.querySelector(".status-caret")?.textContent]);
+            observations.sections = [...document.querySelectorAll(".status-section")].map(node => node.getAttribute("data-status"));
+        """
+        for value in ("bogus", "[]", "null", "5", '"x"', '{"완료":"yes"}'):
+            with self.subTest(value=value):
+                extra = 'try { localStorage.setItem("task-dashboard.folds", ' + json.dumps(value) + '); } catch (error) {} try { localStorage.setItem("task-dashboard.view", "status"); } catch (error) {}'
+                data = self.observe_page(exercise, 1280, extra_setup=extra)
+                self.assertEqual(data["sections"], ["진행 중", "막힘", "완료"])
+                self.assertTrue(all(row[1] == "true" for row in data["toggles"]))
+                self.assertTrue(all(row[2] is False for row in data["toggles"]))
+                self.assertTrue(all(row[3] == "▾" for row in data["toggles"]))
+        with self.subTest("missing"):
+            extra = 'try { localStorage.setItem("task-dashboard.view", "status"); } catch (error) {}'
+            data = self.observe_page(exercise, 1280, extra_setup=extra)
+            self.assertTrue(all(row[1] == "true" for row in data["toggles"]))
+        with self.subTest("storage-throws"):
+            data = self.observe_page("""
+                document.getElementById("view-status").click();
+                observations.toggles = [...document.querySelectorAll(".status-toggle")].map(node => [
+                  node.dataset.status, node.getAttribute("aria-expanded"),
+                  document.getElementById(node.getAttribute("aria-controls"))?.hidden]);
+                const toggle = () => [...document.querySelectorAll(".status-toggle")].find(node => node.dataset.status === "완료");
+                toggle().click();
+                observations.afterToggle = [...document.querySelectorAll(".status-toggle")].map(node => [node.dataset.status, node.getAttribute("aria-expanded")]);
+            """, 1280, extra_setup="""
+                localStorage.getItem = () => { throw new Error("denied"); };
+                localStorage.setItem = () => { throw new Error("denied"); };
+            """)
+            self.assertTrue(all(row[1] == "true" for row in data["toggles"]))
+            self.assertTrue(all(row[2] is False for row in data["toggles"]))
+            self.assertEqual(dict(data["afterToggle"]), {"진행 중": "true", "막힘": "true", "완료": "false"})
+
+    def test_status_fold_search_keeps_collapsed(self):
+        extra = """
+        const needleEvent = (taskId, bot, ts) => ({task_id: taskId, bot, title: taskId + " Title", stage: "코딩",
+          note: "needle note", next: "needle next", ts});
+        snapshot.tasks = [
+          {task_id: "eng-active", bot: "Engineering", title: "Eng Active", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00", note: "needle note", next: "needle next",
+           events: [needleEvent("eng-active", "Engineering", "2026-11-18T12:00:00+09:00")]},
+          {task_id: "eng-done", bot: "Engineering", title: "Eng Done", stage: "완료", status: "완료",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T11:00:00+09:00", note: "needle note", next: "needle next",
+           events: [needleEvent("eng-done", "Engineering", "2026-11-18T11:00:00+09:00")]},
+          {task_id: "qa-active", bot: "QA", title: "Qa Active", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T10:00:00+09:00", note: "needle note", next: "needle next",
+           events: [needleEvent("qa-active", "QA", "2026-11-18T10:00:00+09:00")]},
+          {task_id: "qa-blocked", bot: "QA", title: "Qa Blocked", stage: "막힘", status: "막힘",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T08:00:00+09:00", note: "plain", next: "plain",
+           events: [{task_id: "qa-blocked", bot: "QA", title: "Qa Blocked", stage: "코딩", note: "plain", next: "plain", ts: "2026-11-18T08:00:00+09:00"}]}
+        ];
+        try { localStorage.setItem("task-dashboard.folds", '{"완료": true}'); } catch (error) {}
+        try { localStorage.setItem("task-dashboard.view", "status"); } catch (error) {}
+        """
+        data = self.observe_page("""
+            const searchEl = document.getElementById("search");
+            searchEl.value = "needle";
+            searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+            searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            observations.toggles = [...document.querySelectorAll(".status-toggle")].map(node => [
+              node.dataset.status, node.getAttribute("aria-expanded"),
+              document.getElementById(node.getAttribute("aria-controls"))?.hidden,
+              node.querySelector(".count")?.textContent,
+              node.querySelector(".status-caret")?.textContent,
+              node.querySelector(".status-label")?.textContent + " " + node.querySelector(".count")?.textContent]);
+            observations.sections = [...document.querySelectorAll(".status-section")].map(node => node.getAttribute("data-status"));
+            observations.searchStatus = document.getElementById("search-status").textContent;
+            observations.stored = localStorage.getItem("task-dashboard.folds");
+        """, 1280, extra_setup=extra)
+        self.assertEqual(data["sections"], ["진행 중", "완료"])
+        by_status = {row[0]: row for row in data["toggles"]}
+        self.assertEqual(by_status["완료"][1], "false")
+        self.assertTrue(by_status["완료"][2])
+        self.assertEqual(by_status["완료"][3], "1")
+        self.assertEqual(by_status["완료"][4], "▸")
+        self.assertEqual(by_status["완료"][5], "완료 1")
+        self.assertEqual(by_status["진행 중"][1], "true")
+        self.assertFalse(by_status["진행 중"][2])
+        self.assertEqual(by_status["진행 중"][3], "2")
+        self.assertEqual(by_status["진행 중"][5], "진행 중 2")
+        self.assertNotIn("막힘", data["sections"])
+        self.assertEqual(data["searchStatus"], '검색어 "needle": 3개 작업, 3개 이벤트 일치')
+        self.assertEqual(json.loads(data["stored"]), {"완료": True})
+
+    def test_status_fold_all_control(self):
+        data = self.observe_page("""
+            const toolbar = document.getElementById("status-toolbar");
+            const foldAll = () => document.querySelector(".status-fold-all");
+            const togglesState = () => [...document.querySelectorAll(".status-toggle")].map(node => [
+              node.dataset.status, node.getAttribute("aria-expanded"),
+              document.getElementById(node.getAttribute("aria-controls"))?.hidden]);
+            observations.list = {hidden: toolbar.hidden, text: foldAll()?.textContent,
+              type: foldAll()?.getAttribute("type"), insideSections: document.querySelector("#status-sections .status-fold-all") !== null};
+            document.getElementById("view-status").click();
+            observations.status = {hidden: toolbar.hidden, text: foldAll()?.textContent,
+              type: foldAll()?.getAttribute("type"), insideSections: document.querySelector("#status-sections .status-fold-all") !== null,
+              toggles: togglesState()};
+            foldAll().click();
+            observations.allCollapsed = {hidden: toolbar.hidden, text: foldAll()?.textContent,
+              toggles: togglesState(),
+              stored: JSON.parse(localStorage.getItem("task-dashboard.folds") || "{}")};
+            foldAll().click();
+            observations.allExpanded = {hidden: toolbar.hidden, text: foldAll()?.textContent,
+              toggles: togglesState(),
+              stored: JSON.parse(localStorage.getItem("task-dashboard.folds") || "{}")};
+            const doneToggle = () => [...document.querySelectorAll(".status-toggle")].find(node => node.dataset.status === "완료");
+            doneToggle().click();
+            observations.partial = {text: foldAll()?.textContent, toggles: togglesState()};
+            foldAll().click();
+            observations.afterPartialCollapseAll = {text: foldAll()?.textContent, toggles: togglesState(),
+              stored: JSON.parse(localStorage.getItem("task-dashboard.folds") || "{}")};
+            document.getElementById("view-list").click();
+            observations.backToList = {hidden: toolbar.hidden, sectionsHidden: document.getElementById("status-sections").hidden,
+              sections: document.querySelectorAll(".status-section").length};
+        """, 1280)
+        self.assertTrue(data["list"]["hidden"])
+        self.assertEqual(data["list"]["type"], "button")
+        self.assertFalse(data["list"]["insideSections"])
+        self.assertFalse(data["status"]["hidden"])
+        self.assertEqual(data["status"]["text"], "모두 접기")
+        self.assertEqual(data["status"]["type"], "button")
+        self.assertFalse(data["status"]["insideSections"])
+        self.assertEqual(data["status"]["toggles"], [["진행 중", "true", False], ["막힘", "true", False], ["완료", "true", False]])
+        self.assertFalse(data["allCollapsed"]["hidden"])
+        self.assertEqual(data["allCollapsed"]["text"], "모두 펼치기")
+        self.assertTrue(all(row[1] == "false" and row[2] is True for row in data["allCollapsed"]["toggles"]))
+        self.assertEqual(data["allCollapsed"]["stored"], {"진행 중": True, "막힘": True, "완료": True})
+        self.assertEqual(data["allExpanded"]["text"], "모두 접기")
+        self.assertTrue(all(row[1] == "true" and row[2] is False for row in data["allExpanded"]["toggles"]))
+        self.assertEqual(data["allExpanded"]["stored"], {})
+        self.assertEqual(data["partial"]["text"], "모두 접기")
+        self.assertEqual(data["afterPartialCollapseAll"]["text"], "모두 펼치기")
+        self.assertEqual(data["afterPartialCollapseAll"]["stored"], {"진행 중": True, "막힘": True, "완료": True})
+        self.assertTrue(data["backToList"]["hidden"])
+        self.assertTrue(data["backToList"]["sectionsHidden"])
+        self.assertEqual(data["backToList"]["sections"], 0)
+
+    def test_status_fold_focus_restoration(self):
+        data = self.observe_page("""
+            document.getElementById("view-status").click();
+            const toggle = () => [...document.querySelectorAll(".status-toggle")].find(node => node.dataset.status === "완료");
+            toggle().focus();
+            observations.focusedBefore = document.activeElement?.dataset?.status;
+            toggle().click();
+            observations.focusedAfterClick = {
+              cls: document.activeElement?.className, status: document.activeElement?.dataset?.status,
+              expanded: document.activeElement?.getAttribute?.("aria-expanded"), tag: document.activeElement?.tagName};
+            await tick();
+            observations.focusedAfterTick = {
+              cls: document.activeElement?.className, status: document.activeElement?.dataset?.status,
+              expanded: document.activeElement?.getAttribute?.("aria-expanded"), tag: document.activeElement?.tagName};
+            toggle().click();
+            const taskToggle = () => [...document.querySelectorAll(".status-section .task-toggle")].find(node => node.dataset.taskId === "active");
+            taskToggle().focus();
+            observations.taskFocused = document.activeElement?.dataset?.taskId;
+            taskToggle().click();
+            observations.taskAfterClick = document.activeElement?.dataset?.taskId;
+            await tick();
+            observations.taskAfterTick = document.activeElement?.dataset?.taskId;
+        """, 1280)
+        self.assertEqual(data["focusedBefore"], "완료")
+        self.assertIn("status-toggle", data["focusedAfterClick"]["cls"])
+        self.assertEqual(data["focusedAfterClick"]["status"], "완료")
+        self.assertEqual(data["focusedAfterClick"]["expanded"], "false")
+        self.assertEqual(data["focusedAfterClick"]["tag"], "BUTTON")
+        self.assertIn("status-toggle", data["focusedAfterTick"]["cls"])
+        self.assertEqual(data["focusedAfterTick"]["status"], "완료")
+        self.assertEqual(data["focusedAfterTick"]["expanded"], "false")
+        self.assertEqual(data["taskFocused"], "active")
+        self.assertEqual(data["taskAfterClick"], "active")
+        self.assertEqual(data["taskAfterTick"], "active")
+
+    def test_status_fold_mobile_toggle_height(self):
+        data = self.observe_page("""
+            document.getElementById("view-status").click();
+            const toggle = [...document.querySelectorAll(".status-toggle")].find(node => node.dataset.status === "완료");
+            const rect = toggle.getBoundingClientRect();
+            observations.rect = {height: rect.height, width: rect.width};
+            observations.computed = {minHeight: getComputedStyle(toggle).minHeight,
+              touchAction: getComputedStyle(toggle).touchAction, width: getComputedStyle(toggle).width};
+            observations.is640 = matchMedia("(max-width: 640px)").matches;
+        """, 390)
+        self.assertTrue(data["is640"])
+        self.assertGreaterEqual(data["rect"]["height"], 44)
+
 
 class MobileStaticTests(unittest.TestCase):
     def test_viewport_meta(self):
@@ -3030,3 +3321,10 @@ class MobileStaticTests(unittest.TestCase):
         self.assertIn("task-dashboard.view", server.PAGE)
         self.assertIn("function doneTimeOf(task)", server.PAGE)
         self.assertIn("function doneTaskCompare(a, b)", server.PAGE)
+
+    def test_status_fold_static(self):
+        self.assertIn("task-dashboard.folds", server.PAGE)
+        self.assertIn("status-toggle", server.PAGE)
+        self.assertIn("status-fold-all", server.PAGE)
+        self.assertIn('id="status-toolbar"', server.PAGE)
+        self.assertIn("status-panel-", server.PAGE)
