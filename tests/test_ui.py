@@ -1333,6 +1333,582 @@ class DashboardUITests(unittest.TestCase):
                 self.assertEqual(data["stageLast"], ["only-active", "stage-done"])
 
 
+    def test_search_matching_and_helpers(self):
+        extra = """
+        snapshot.tasks = [
+          {task_id: "and-task", bot: "Engineering", title: "Alpha Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00", note: "latest note", next: "latest next",
+           events: [
+             {task_id: "and-task", bot: "Engineering", title: "Alpha Title", stage: "코딩", note: "beta note here", next: "first next", ts: "2026-11-18T09:00:00+09:00"},
+             {task_id: "and-task", bot: "Engineering", title: "Alpha Title", stage: "코딩", note: "latest note", next: "latest next", ts: "2026-11-18T12:00:00+09:00"}
+           ]},
+          {task_id: "split-task", bot: "Engineering", title: "Split Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T11:00:00+09:00", note: "latest", next: "latest",
+           events: [
+             {task_id: "split-task", bot: "Engineering", title: "Split Title", stage: "코딩", note: "alpha only", next: "n1", ts: "2026-11-18T09:00:00+09:00"},
+             {task_id: "split-task", bot: "Engineering", title: "Split Title", stage: "코딩", note: "beta only", next: "n2", ts: "2026-11-18T11:00:00+09:00"}
+           ]},
+          {task_id: "old-task", bot: "QA", title: "Old Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T10:00:00+09:00", note: "latest plain", next: "plain next",
+           events: [
+             {task_id: "old-task", bot: "QA", title: "Old Title", stage: "계획", note: "needle in old event", next: "old next", ts: "2026-11-18T09:00:00+09:00"},
+             {task_id: "old-task", bot: "QA", title: "Old Title", stage: "코딩", note: "latest plain", next: "plain next", ts: "2026-11-18T10:00:00+09:00"}
+           ]},
+          {task_id: "current-only", bot: "Engineering", title: "UniqueCurrent Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T09:30:00+09:00", note: "UniqueCurrent note", next: "UniqueCurrent next",
+           events: [
+             {task_id: "current-only", bot: "Engineering", title: "Plain Title", stage: "코딩", note: "plain", next: "plain", ts: "2026-11-18T09:30:00+09:00"}
+           ]}
+        ];
+        """
+        data = self.observe_page("""
+            const waitFor = async (fn, timeout = 3000) => {
+              const start = Date.now();
+              while (Date.now() - start < timeout) {
+                try { if (fn()) return true; } catch (e) {}
+                await new Promise(resolve => setTimeout(resolve, 25));
+              }
+              return false;
+            };
+            const searchEl = document.getElementById("search");
+            const applySearch = (query) => {
+              searchEl.value = query;
+              searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+              searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            };
+            const ids = () => [...document.querySelectorAll(".task-toggle")].map(node => node.dataset.taskId);
+            const counts = () => [...document.querySelectorAll(".count")].map(node => Number(node.textContent));
+            const ev = {task_id: "x", title: "Alpha", bot: "Eng", stage: "코딩", note: "beta", next: "", ts: "2026-11-18T09:00:00+09:00"};
+            observations.helpers = {
+              types: [typeof window.searchKeywordsFor, typeof window.searchEventMatches, typeof window.matchingEventsForTask, typeof window.normalizeSearchText, typeof window.appendHighlightedText],
+              keywords: searchKeywordsFor("  Alpha  beta  "),
+              empty: searchKeywordsFor("   "),
+              normalized: normalizeSearchText("AbC"),
+              matchBoth: searchEventMatches(ev, ["alpha", "beta"]),
+              matchMissing: searchEventMatches(ev, ["alpha", "gamma"]),
+              matchEmpty: searchEventMatches(ev, []),
+              matchedCount: matchingEventsForTask(snapshot.tasks[0], ["alpha"]).length,
+              matchedTs: searchEventMatches(ev, ["09:00"]),
+            };
+            observations.initialIds = ids();
+            applySearch("ALPHA");
+            observations.caseIds = ids();
+            observations.caseMarks = [...document.querySelectorAll(".task-row mark")].map(node => node.textContent);
+            applySearch("alpha beta");
+            observations.andIds = ids();
+            observations.andCounts = counts();
+            observations.andStatus = document.getElementById("search-status").textContent;
+            applySearch("09:00");
+            observations.tsIds = ids();
+            applySearch("needle");
+            observations.needleIds = ids();
+            const hist = document.querySelector(".history");
+            observations.needleHeading = hist ? hist.querySelector("h2").textContent : null;
+            observations.needleCount = hist ? hist.querySelector("table").tBodies[0].rows.length : -1;
+            observations.needleNotes = hist ? [...hist.querySelector("table").tBodies[0].rows].map(tr => tr.cells[2].textContent) : [];
+            observations.needleColSpan = hist ? hist.cells[0].colSpan : -1;
+            observations.needleHit = hist ? [...hist.querySelector("table").tBodies[0].rows].map(tr => tr.classList.contains("hit")) : [];
+            applySearch("UniqueCurrent");
+            observations.currentIds = ids();
+            observations.currentCounts = counts();
+            observations.emptyText = document.querySelector("td.empty") ? document.querySelector("td.empty").textContent : null;
+            observations.emptySpan = document.querySelector("td.empty") ? document.querySelector("td.empty").colSpan : -1;
+            observations.noResultStatus = document.getElementById("search-status").textContent;
+            applySearch("");
+            observations.clearedIds = ids();
+            observations.clearedStatusHidden = document.getElementById("search-status").hidden;
+            observations.clearedHasHistory = document.querySelector(".history") !== null;
+        """, 1280, extra_setup=extra)
+        self.assertEqual(data["helpers"]["types"], ["function"] * 5)
+        self.assertEqual(data["helpers"]["keywords"], ["alpha", "beta"])
+        self.assertEqual(data["helpers"]["empty"], [])
+        self.assertEqual(data["helpers"]["normalized"], "abc")
+        self.assertTrue(data["helpers"]["matchBoth"])
+        self.assertFalse(data["helpers"]["matchMissing"])
+        self.assertFalse(data["helpers"]["matchEmpty"])
+        self.assertEqual(data["helpers"]["matchedCount"], 2)
+        self.assertTrue(data["helpers"]["matchedTs"])
+        self.assertEqual(data["initialIds"], ["and-task", "split-task", "old-task", "current-only"])
+        self.assertEqual(data["caseIds"], ["and-task", "split-task"])
+        self.assertIn("Alpha", data["caseMarks"])
+        self.assertEqual(data["andIds"], ["and-task"])
+        self.assertEqual(data["andCounts"], [1, 1, 0, 0])
+        self.assertEqual(data["andStatus"], '검색어 "alpha beta": 1개 작업, 1개 이벤트 일치')
+        self.assertEqual(data["tsIds"], ["and-task", "split-task", "old-task"])
+        self.assertEqual(data["needleIds"], ["old-task"])
+        self.assertEqual(data["needleHeading"], "일치한 이벤트 1개 (전체 2개)")
+        self.assertEqual(data["needleCount"], 1)
+        self.assertEqual(data["needleNotes"], ["needle in old event"])
+        self.assertEqual(data["needleColSpan"], 7)
+        self.assertEqual(data["needleHit"], [True])
+        self.assertEqual(data["currentIds"], [])
+        self.assertEqual(data["currentCounts"], [0, 0, 0, 0])
+        self.assertEqual(data["emptyText"], "일치하는 이벤트가 없습니다.")
+        self.assertEqual(data["emptySpan"], 7)
+        self.assertEqual(data["noResultStatus"], '검색어 "UniqueCurrent": 0개 작업, 0개 이벤트 일치')
+        self.assertEqual(data["clearedIds"], data["initialIds"])
+        self.assertTrue(data["clearedStatusHidden"])
+        self.assertFalse(data["clearedHasHistory"])
+
+
+    def test_search_highlight_safe_and_full_history(self):
+        extra = """
+        snapshot.tasks = [
+          {task_id: "safe-task", bot: "Engineering", title: "Safe Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00", note: "x <b>x</b> a.c( y", next: "next <i>y</i>",
+           events: [
+             {task_id: "safe-task", bot: "Engineering", title: "Safe Title", stage: "코딩", note: "plain other", next: "plain next", ts: "2026-11-18T09:00:00+09:00"},
+             {task_id: "safe-task", bot: "Engineering", title: "Safe Title", stage: "코딩", note: "x <b>x</b> a.c( y", next: "next <i>y</i>", ts: "2026-11-18T12:00:00+09:00"}
+           ]},
+          {task_id: "abc-task", bot: "Engineering", title: "Abc Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T11:00:00+09:00", note: "abc", next: "abc next",
+           events: [
+             {task_id: "abc-task", bot: "Engineering", title: "Abc Title", stage: "코딩", note: "abc", next: "abc next", ts: "2026-11-18T11:00:00+09:00"}
+           ]},
+          {task_id: "overlap-task", bot: "Engineering", title: "Overlap", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T10:00:00+09:00", note: "hello", next: "hello next",
+           events: [
+             {task_id: "overlap-task", bot: "Engineering", title: "Overlap", stage: "코딩", note: "hello", next: "hello next", ts: "2026-11-18T10:00:00+09:00"}
+           ]}
+        ];
+        """
+        data = self.observe_page("""
+            const searchEl = document.getElementById("search");
+            const applySearch = (query) => {
+              searchEl.value = query;
+              searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+              searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            };
+            const ids = () => [...document.querySelectorAll(".task-toggle")].map(node => node.dataset.taskId);
+            const rowById = id => [...document.querySelectorAll(".task-row")].find(row => row.querySelector(".task-toggle")?.dataset.taskId === id);
+            const noteCell = id => rowById(id)?.querySelector('td[data-column="note"]');
+            applySearch("a.c(");
+            observations.safeIds = ids();
+            observations.safeMarks = [...document.querySelectorAll(".task-row mark")].map(node => node.textContent);
+            observations.safeNoteText = noteCell("safe-task")?.textContent;
+            observations.safeInjectedB = document.querySelectorAll("#rows b").length;
+            const safeHist = document.querySelector(".history");
+            observations.safeMatchHeading = safeHist ? safeHist.querySelector("h2").textContent : null;
+            observations.safeMatchCount = safeHist ? safeHist.querySelector("table").tBodies[0].rows.length : -1;
+            observations.safeHistoryB = safeHist ? safeHist.querySelectorAll("b").length : -1;
+            observations.safeMarkStyle = (() => {
+              const mark = document.querySelector(".task-row mark");
+              if (!mark) return null;
+              const style = getComputedStyle(mark);
+              return [style.backgroundColor, style.color, style.fontWeight];
+            })();
+            const idMarkWeight = (() => {
+              const idSpan = document.querySelector(".task-row .task-id");
+              const mark = idSpan ? idSpan.querySelector("mark") : null;
+              if (!idSpan) return null;
+              return [getComputedStyle(idSpan).fontWeight, mark ? getComputedStyle(mark).fontWeight : null];
+            })();
+            observations.idMarkWeight = idMarkWeight;
+            const toggle = [...document.querySelectorAll(".task-toggle")].find(node => node.dataset.taskId === "safe-task");
+            toggle.focus();
+            toggle.click();
+            const full = document.querySelector(".history");
+            observations.fullHeading = full ? full.querySelector("h2").textContent : null;
+            observations.fullCount = full ? full.querySelector("table").tBodies[0].rows.length : -1;
+            observations.fullHits = full ? [...full.querySelector("table").tBodies[0].rows].map(tr => tr.classList.contains("hit")) : [];
+            observations.fullMarkCounts = full ? [...full.querySelector("table").tBodies[0].rows].map(tr => tr.querySelectorAll("mark").length) : [];
+            observations.fullLabels = full ? [...full.querySelector("table").tBodies[0].rows[0].cells].map(td => td.dataset.label) : [];
+            observations.fullColSpan = full ? full.cells[0].colSpan : -1;
+            applySearch("a.c");
+            observations.dotIds = ids();
+            applySearch("hell ello");
+            observations.overlapIds = ids();
+            const overlapNote = noteCell("overlap-task");
+            observations.overlapMarks = overlapNote ? [...overlapNote.querySelectorAll("mark")].map(node => node.textContent) : [];
+            observations.overlapText = overlapNote ? overlapNote.textContent : null;
+            observations.overlapNested = overlapNote ? overlapNote.querySelectorAll("mark mark").length : -1;
+            applySearch("safe");
+            const safeIdSpan = document.querySelector(".task-row .task-id");
+            const safeIdMark = safeIdSpan ? safeIdSpan.querySelector("mark") : null;
+            observations.safeIdMark = safeIdMark ? [safeIdMark.textContent, getComputedStyle(safeIdMark).fontWeight, getComputedStyle(safeIdSpan).fontWeight] : null;
+        """, 1280, extra_setup=extra)
+        self.assertEqual(data["safeIds"], ["safe-task"])
+        self.assertIn("a.c(", data["safeMarks"])
+        self.assertEqual(data["safeNoteText"], "x <b>x</b> a.c( y")
+        self.assertEqual(data["safeInjectedB"], 0)
+        self.assertEqual(data["safeMatchHeading"], "일치한 이벤트 1개 (전체 2개)")
+        self.assertEqual(data["safeMatchCount"], 1)
+        self.assertEqual(data["safeHistoryB"], 0)
+        self.assertEqual(data["safeMarkStyle"][0], "rgb(255, 241, 168)")
+        self.assertEqual(data["idMarkWeight"][0], "700")
+        # task-id has no safe keyword in this fixture, so mark weight is null; still bold check holds.
+        self.assertEqual(data["fullHeading"], "이벤트 이력")
+        self.assertEqual(data["fullCount"], 2)
+        self.assertEqual(data["fullHits"], [False, True])
+        self.assertEqual(data["fullLabels"], ["시각", "단계", "메모", "다음 할 일"])
+        self.assertEqual(data["fullColSpan"], 7)
+        self.assertEqual(data["fullMarkCounts"][1], 1)
+        self.assertEqual(data["fullMarkCounts"][0], 0)
+        self.assertEqual(data["dotIds"], ["safe-task"])
+        self.assertEqual(data["overlapIds"], ["overlap-task"])
+        self.assertEqual(data["overlapMarks"], ["hello"])
+        self.assertEqual(data["overlapText"], "hello")
+        self.assertEqual(data["overlapNested"], 0)
+        self.assertEqual(data["safeIdMark"], ["safe", "700", "700"])
+
+
+    def test_search_counts_bot_status_and_columns(self):
+        extra = """
+        const needleEvent = (taskId, bot, ts) => ({task_id: taskId, bot, title: taskId + " Title", stage: "코딩",
+          note: "needle note", next: "needle next", ts});
+        snapshot.tasks = [
+          {task_id: "eng-active", bot: "Engineering", title: "Eng Active", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00", note: "needle note", next: "needle next",
+           events: [needleEvent("eng-active", "Engineering", "2026-11-18T12:00:00+09:00")]},
+          {task_id: "eng-done", bot: "Engineering", title: "Eng Done", stage: "완료", status: "완료",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T11:00:00+09:00", note: "needle note", next: "needle next",
+           events: [needleEvent("eng-done", "Engineering", "2026-11-18T11:00:00+09:00")]},
+          {task_id: "qa-active", bot: "QA", title: "Qa Active", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T10:00:00+09:00", note: "needle note", next: "needle next",
+           events: [needleEvent("qa-active", "QA", "2026-11-18T10:00:00+09:00")]},
+          {task_id: "eng-plain", bot: "Engineering", title: "Eng Plain", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T09:00:00+09:00", note: "plain", next: "plain",
+           events: [{task_id: "eng-plain", bot: "Engineering", title: "Eng Plain", stage: "코딩", note: "plain", next: "plain", ts: "2026-11-18T09:00:00+09:00"}]},
+          {task_id: "qa-blocked", bot: "QA", title: "Qa Blocked", stage: "막힘", status: "막힘",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T08:00:00+09:00", note: "needle note", next: "needle next",
+           events: [needleEvent("qa-blocked", "QA", "2026-11-18T08:00:00+09:00")]}
+        ];
+        """
+        data = self.observe_page("""
+            const waitFor = async (fn, timeout = 3000) => {
+              const start = Date.now();
+              while (Date.now() - start < timeout) {
+                try { if (fn()) return true; } catch (e) {}
+                await new Promise(resolve => setTimeout(resolve, 25));
+              }
+              return false;
+            };
+            const searchEl = document.getElementById("search");
+            const applySearch = (query) => {
+              searchEl.value = query;
+              searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+              searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            };
+            const ids = () => [...document.querySelectorAll(".task-toggle")].map(node => node.dataset.taskId);
+            const counts = () => [...document.querySelectorAll(".count")].map(node => Number(node.textContent));
+            const select = document.getElementById("bot-filter");
+            applySearch("needle");
+            observations.allIds = ids();
+            observations.allCounts = counts();
+            observations.allStatus = document.getElementById("search-status").textContent;
+            select.value = "Engineering";
+            select.dispatchEvent(new Event("change"));
+            observations.engIds = ids();
+            observations.engCounts = counts();
+            observations.engStatus = document.getElementById("search-status").textContent;
+            document.querySelector('[data-status="완료"]').click();
+            observations.doneIds = ids();
+            observations.doneCounts = counts();
+            observations.doneStatus = document.getElementById("search-status").textContent;
+            const table = document.querySelector(".tasks");
+            const panel = document.getElementById("columns-panel");
+            const button = document.getElementById("columns-button");
+            const byKey = key => panel.querySelector(`input[data-column="${key}"]`);
+            button.click();
+            byKey("stage").click();
+            byKey("note").click();
+            observations.colHeaders = [...table.tHead.rows[0].cells].map(node => node.textContent);
+            observations.colRowCells = table.tBodies[0].rows[0].cells.length;
+            const hist = table.querySelector(".history");
+            observations.colHistSpan = hist ? hist.cells[0].colSpan : -1;
+            observations.colHistHeading = hist ? hist.querySelector("h2").textContent : null;
+            observations.colIds = ids();
+            panel.querySelector('.column-item[data-column="bot"] button[data-direction="down"]').click();
+            panel.querySelector('.column-item[data-column="bot"] button[data-direction="down"]').click();
+            observations.movedHeaders = [...table.tHead.rows[0].cells].map(node => node.textContent);
+            observations.movedRowCells = [...table.tBodies[0].rows[0].cells].map(node => node.textContent);
+            observations.movedHistSpan = table.querySelector(".history") ? table.querySelector(".history").cells[0].colSpan : -1;
+            observations.movedIds = ids();
+            applySearch("no-such-needle");
+            observations.emptyHeaders = [...table.tHead.rows[0].cells].map(node => node.textContent);
+            observations.emptySpan = document.querySelector("td.empty") ? document.querySelector("td.empty").colSpan : -1;
+            observations.emptyText = document.querySelector("td.empty") ? document.querySelector("td.empty").textContent : null;
+            observations.emptyStatus = document.getElementById("search-status").textContent;
+        """, 1280, extra_setup=extra)
+        self.assertEqual(data["allIds"], ["eng-active", "qa-active", "qa-blocked", "eng-done"])
+        self.assertEqual(data["allCounts"], [4, 2, 1, 1])
+        self.assertEqual(data["allStatus"], '검색어 "needle": 4개 작업, 4개 이벤트 일치')
+        self.assertEqual(data["engIds"], ["eng-active", "eng-done"])
+        self.assertEqual(data["engCounts"], [2, 1, 1, 0])
+        self.assertEqual(data["engStatus"], '검색어 "needle": 2개 작업, 2개 이벤트 일치')
+        self.assertEqual(data["doneIds"], ["eng-done"])
+        self.assertEqual(data["doneCounts"], [2, 1, 1, 0])
+        self.assertEqual(data["doneStatus"], '검색어 "needle": 1개 작업, 1개 이벤트 일치')
+        self.assertEqual(data["colHeaders"], ["봇", "작업", "시작", "마지막 업데이트", "다음 할 일"])
+        self.assertEqual(data["colRowCells"], 5)
+        self.assertEqual(data["colHistSpan"], 5)
+        self.assertEqual(data["colHistHeading"], "일치한 이벤트 1개 (전체 1개)")
+        self.assertEqual(data["colIds"], ["eng-done"])
+        self.assertEqual(data["movedHeaders"][0], "작업")
+        self.assertEqual(data["movedHeaders"][1], "봇")
+        self.assertEqual(data["movedRowCells"][0], "eng-doneEng Done")
+        self.assertEqual(data["movedRowCells"][1], "Engineering")
+        self.assertEqual(data["movedHistSpan"], 5)
+        self.assertEqual(data["movedIds"], ["eng-done"])
+        self.assertEqual(data["emptyHeaders"], data["movedHeaders"])
+        self.assertEqual(data["emptySpan"], 5)
+        self.assertEqual(data["emptyText"], "일치하는 이벤트가 없습니다.")
+        self.assertEqual(data["emptyStatus"], '검색어 "no-such-needle": 0개 작업, 0개 이벤트 일치')
+
+
+    def test_search_url_preload_and_popstate(self):
+        extra = """
+        try { history.replaceState(null, "", "?q=needle&foo=bar"); } catch (e) { window.__preloadError = String(e); }
+        snapshot.tasks = [
+          {task_id: "need-task", bot: "Engineering", title: "Needle Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00", note: "needle note", next: "needle next",
+           events: [{task_id: "need-task", bot: "Engineering", title: "Needle Title", stage: "코딩", note: "needle note", next: "needle next", ts: "2026-11-18T12:00:00+09:00"}]},
+          {task_id: "alpha-task", bot: "Engineering", title: "Alpha Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T11:00:00+09:00", note: "alpha note", next: "alpha next",
+           events: [{task_id: "alpha-task", bot: "Engineering", title: "Alpha Title", stage: "코딩", note: "alpha note", next: "alpha next", ts: "2026-11-18T11:00:00+09:00"}]},
+          {task_id: "plain-task", bot: "Engineering", title: "Plain", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T10:00:00+09:00", note: "plain", next: "plain",
+           events: [{task_id: "plain-task", bot: "Engineering", title: "Plain", stage: "코딩", note: "plain", next: "plain", ts: "2026-11-18T10:00:00+09:00"}]}
+        ];
+        """
+        data = self.observe_page("""
+            const searchEl = document.getElementById("search");
+            const searchClear = document.getElementById("search-clear");
+            const ids = () => [...document.querySelectorAll(".task-toggle")].map(node => node.dataset.taskId);
+            const params = new URLSearchParams(location.search);
+            observations.initial = {
+              value: searchEl.value,
+              clearHidden: searchClear.hidden,
+              ids: ids(),
+              status: document.getElementById("search-status").textContent,
+              search: location.search,
+              q: params.get("q"),
+              foo: params.get("foo"),
+            };
+            observations.preloadError = window.__preloadError || null;
+            history.pushState(null, "", "?q=alpha&foo=bar");
+            window.dispatchEvent(new PopStateEvent("popstate"));
+            observations.afterPop = {
+              value: searchEl.value,
+              clearHidden: searchClear.hidden,
+              ids: ids(),
+              status: document.getElementById("search-status").textContent,
+              search: location.search,
+            };
+            searchEl.value = "needle";
+            searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+            searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            observations.afterType = {
+              ids: ids(),
+              search: location.search,
+              q: new URLSearchParams(location.search).get("q"),
+              foo: new URLSearchParams(location.search).get("foo"),
+            };
+        """, 1280, extra_setup=extra)
+        self.assertIsNone(data["preloadError"])
+        self.assertEqual(data["initial"]["value"], "needle")
+        self.assertFalse(data["initial"]["clearHidden"])
+        self.assertEqual(data["initial"]["ids"], ["need-task"])
+        self.assertEqual(data["initial"]["status"], '검색어 "needle": 1개 작업, 1개 이벤트 일치')
+        self.assertEqual(data["initial"]["q"], "needle")
+        self.assertEqual(data["initial"]["foo"], "bar")
+        self.assertEqual(data["afterPop"]["value"], "alpha")
+        self.assertEqual(data["afterPop"]["ids"], ["alpha-task"])
+        self.assertEqual(data["afterPop"]["status"], '검색어 "alpha": 1개 작업, 1개 이벤트 일치')
+        self.assertEqual(data["afterType"]["ids"], ["need-task"])
+        self.assertEqual(data["afterType"]["q"], "needle")
+        self.assertEqual(data["afterType"]["foo"], "bar")
+
+
+    def test_search_debounce_clear_escape_and_refresh(self):
+        extra = """
+        snapshot.tasks = [
+          {task_id: "need-task", bot: "Engineering", title: "Needle Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00", note: "needle note", next: "needle next",
+           events: [{task_id: "need-task", bot: "Engineering", title: "Needle Title", stage: "코딩", note: "needle note", next: "needle next", ts: "2026-11-18T12:00:00+09:00"}]},
+          {task_id: "alpha-task", bot: "Engineering", title: "Alpha Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T11:00:00+09:00", note: "alpha note", next: "alpha next",
+           events: [{task_id: "alpha-task", bot: "Engineering", title: "Alpha Title", stage: "코딩", note: "alpha note", next: "alpha next", ts: "2026-11-18T11:00:00+09:00"}]},
+          {task_id: "plain-task", bot: "Engineering", title: "Plain", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T10:00:00+09:00", note: "plain", next: "plain",
+           events: [{task_id: "plain-task", bot: "Engineering", title: "Plain", stage: "코딩", note: "plain", next: "plain", ts: "2026-11-18T10:00:00+09:00"}]}
+        ];
+        """
+        data = self.observe_page("""
+            const waitFor = async (fn, timeout = 3000) => {
+              const start = Date.now();
+              while (Date.now() - start < timeout) {
+                try { if (fn()) return true; } catch (e) {}
+                await new Promise(resolve => setTimeout(resolve, 25));
+              }
+              return false;
+            };
+            const searchEl = document.getElementById("search");
+            const searchClear = document.getElementById("search-clear");
+            const ids = () => [...document.querySelectorAll(".task-toggle")].map(node => node.dataset.taskId);
+            const calls = [];
+            const originalReplace = history.replaceState.bind(history);
+            history.replaceState = (...args) => { calls.push(args); try { return originalReplace(...args); } catch (e) {} };
+            observations.initial = {
+              type: searchEl.type, id: searchEl.id, placeholder: searchEl.placeholder,
+              autocomplete: searchEl.autocomplete, enterkeyhint: searchEl.getAttribute("enterkeyhint"),
+              label: document.querySelector('label[for="search"]') ? document.querySelector('label[for="search"]').textContent : null,
+              labelClass: document.querySelector('label[for="search"]') ? document.querySelector('label[for="search"]').className : null,
+              clearType: searchClear.type, clearLabel: searchClear.getAttribute("aria-label"),
+              clearHidden: searchClear.hidden,
+              statusRole: document.getElementById("search-status").getAttribute("role"),
+              statusLive: document.getElementById("search-status").getAttribute("aria-live"),
+              statusHidden: document.getElementById("search-status").hidden,
+              ids: ids(),
+            };
+            searchEl.value = "needle";
+            searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+            observations.immediate = {ids: ids(), calls: calls.length, clearHidden: searchClear.hidden};
+            observations.debounceOk = await waitFor(() => ids().length === 1 && new URLSearchParams(location.search).get("q") === "needle");
+            observations.afterDebounce = {
+              ids: ids(),
+              calls: calls.length,
+              urls: calls.map(args => String(args[2])),
+              search: location.search,
+              status: document.getElementById("search-status").textContent,
+            };
+            searchEl.focus();
+            snapshot.tasks = [
+              {task_id: "need-task", bot: "Engineering", title: "Needle Title", stage: "코딩", status: "진행 중",
+               started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00", note: "needle note", next: "needle next",
+               events: [{task_id: "need-task", bot: "Engineering", title: "Needle Title", stage: "코딩", note: "needle note", next: "needle next", ts: "2026-11-18T12:00:00+09:00"}]},
+              {task_id: "alpha-task", bot: "Engineering", title: "Alpha Title", stage: "코딩", status: "진행 중",
+               started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T11:00:00+09:00", note: "alpha note", next: "alpha next",
+               events: [{task_id: "alpha-task", bot: "Engineering", title: "Alpha Title", stage: "코딩", note: "alpha note", next: "alpha next", ts: "2026-11-18T11:00:00+09:00"}]}
+            ];
+            await tick();
+            observations.afterRefresh = {
+              value: searchEl.value,
+              focused: document.activeElement === searchEl,
+              ids: ids(),
+              search: location.search,
+            };
+            searchEl.focus();
+            searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true, cancelable: true}));
+            observations.afterEscape = {
+              value: searchEl.value,
+              ids: ids(),
+              hasQ: new URLSearchParams(location.search).has("q"),
+              clearHidden: searchClear.hidden,
+              statusHidden: document.getElementById("search-status").hidden,
+            };
+            searchEl.value = "needle";
+            searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+            searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            observations.enterImmediate = {ids: ids(), q: new URLSearchParams(location.search).get("q")};
+            searchClear.click();
+            observations.afterClear = {
+              value: searchEl.value,
+              ids: ids(),
+              hasQ: new URLSearchParams(location.search).has("q"),
+              clearHidden: searchClear.hidden,
+              statusHidden: document.getElementById("search-status").hidden,
+            };
+        """, 1280, extra_setup=extra)
+        self.assertEqual(data["initial"]["type"], "search")
+        self.assertEqual(data["initial"]["id"], "search")
+        self.assertEqual(data["initial"]["placeholder"], "이벤트 키워드 검색 (공백으로 여러 단어, AND)")
+        self.assertEqual(data["initial"]["autocomplete"], "off")
+        self.assertEqual(data["initial"]["enterkeyhint"], "search")
+        self.assertEqual(data["initial"]["label"], "이벤트 키워드 검색")
+        self.assertEqual(data["initial"]["labelClass"], "visually-hidden")
+        self.assertEqual(data["initial"]["clearType"], "button")
+        self.assertEqual(data["initial"]["clearLabel"], "검색어 지우기")
+        self.assertTrue(data["initial"]["clearHidden"])
+        self.assertEqual(data["initial"]["statusRole"], "status")
+        self.assertEqual(data["initial"]["statusLive"], "polite")
+        self.assertTrue(data["initial"]["statusHidden"])
+        self.assertEqual(data["initial"]["ids"], ["need-task", "alpha-task", "plain-task"])
+        self.assertEqual(data["immediate"]["ids"], data["initial"]["ids"])
+        self.assertFalse(data["immediate"]["clearHidden"])
+        self.assertTrue(data["debounceOk"])
+        self.assertEqual(data["afterDebounce"]["ids"], ["need-task"])
+        self.assertGreaterEqual(data["afterDebounce"]["calls"], 1)
+        self.assertTrue(any("q=needle" in url for url in data["afterDebounce"]["urls"]))
+        self.assertEqual(data["afterDebounce"]["status"], '검색어 "needle": 1개 작업, 1개 이벤트 일치')
+        self.assertEqual(data["afterRefresh"]["value"], "needle")
+        self.assertTrue(data["afterRefresh"]["focused"])
+        self.assertEqual(data["afterRefresh"]["ids"], ["need-task"])
+        self.assertEqual(data["afterRefresh"]["search"], "?q=needle")
+        self.assertEqual(data["afterEscape"]["value"], "")
+        self.assertEqual(data["afterEscape"]["ids"], ["need-task", "alpha-task"])
+        self.assertFalse(data["afterEscape"]["hasQ"])
+        self.assertTrue(data["afterEscape"]["clearHidden"])
+        self.assertTrue(data["afterEscape"]["statusHidden"])
+        self.assertEqual(data["enterImmediate"]["ids"], ["need-task"])
+        self.assertEqual(data["enterImmediate"]["q"], "needle")
+        self.assertEqual(data["afterClear"]["value"], "")
+        self.assertEqual(data["afterClear"]["ids"], ["need-task", "alpha-task"])
+        self.assertFalse(data["afterClear"]["hasQ"])
+        self.assertTrue(data["afterClear"]["clearHidden"])
+        self.assertTrue(data["afterClear"]["statusHidden"])
+
+
+    def test_search_mobile_layout(self):
+        extra = """
+        snapshot.tasks = [
+          {task_id: "need-task", bot: "Engineering", title: "Needle Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00", note: "needle note", next: "needle next",
+           events: [{task_id: "need-task", bot: "Engineering", title: "Needle Title", stage: "코딩", note: "needle note", next: "needle next", ts: "2026-11-18T12:00:00+09:00"}]},
+          {task_id: "plain-task", bot: "Engineering", title: "Plain", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T10:00:00+09:00", note: "plain", next: "plain",
+           events: [{task_id: "plain-task", bot: "Engineering", title: "Plain", stage: "코딩", note: "plain", next: "plain", ts: "2026-11-18T10:00:00+09:00"}]}
+        ];
+        """
+        exercise = """
+            const searchEl = document.getElementById("search");
+            const searchClear = document.getElementById("search-clear");
+            const applySearch = (query) => {
+              searchEl.value = query;
+              searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+              searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            };
+            applySearch("needle");
+            const inputRect = searchEl.getBoundingClientRect();
+            const clearRect = searchClear.getBoundingClientRect();
+            const inputStyle = getComputedStyle(searchEl);
+            observations.layout = {
+              fontSize: parseFloat(inputStyle.fontSize),
+              minHeight: parseFloat(inputStyle.minHeight),
+              inputHeight: inputRect.height,
+              inputWidth: inputRect.width,
+              clearWidth: clearRect.width,
+              clearHeight: clearRect.height,
+              clearHidden: searchClear.hidden,
+              noOverflow: [document.documentElement.scrollWidth <= window.innerWidth, document.body.scrollWidth <= window.innerWidth],
+              scrollWidth: document.documentElement.scrollWidth,
+              innerWidth: window.innerWidth,
+              wrapWidth: document.querySelector(".search-wrap").getBoundingClientRect().width,
+              filterWidth: document.querySelector(".filter-bar").getBoundingClientRect().width,
+              ids: [...document.querySelectorAll(".task-toggle")].map(node => node.dataset.taskId),
+              marks: [...document.querySelectorAll("mark")].map(node => node.textContent),
+              historyLabels: document.querySelector(".history") ? [...document.querySelectorAll(".history tbody tr")[0].cells].map(td => td.dataset.label) : [],
+            };
+        """
+        for width in (1280, 390):
+            with self.subTest(width=width):
+                data = self.observe_page(exercise, width, extra_setup=extra)
+                layout = data["layout"]
+                self.assertGreaterEqual(layout["fontSize"], 16)
+                self.assertEqual(layout["ids"], ["need-task"])
+                self.assertIn("needle", layout["marks"])
+                self.assertEqual(layout["historyLabels"], ["시각", "단계", "메모", "다음 할 일"])
+                self.assertFalse(layout["clearHidden"])
+                if width == 390:
+                    self.assertGreaterEqual(layout["clearWidth"], 44)
+                    self.assertGreaterEqual(layout["clearHeight"], 44)
+                    self.assertGreaterEqual(layout["inputHeight"], 44)
+                    self.assertGreaterEqual(layout["minHeight"], 44)
+                    self.assertTrue(all(layout["noOverflow"]))
+                    self.assertLessEqual(layout["scrollWidth"], layout["innerWidth"])
+                    self.assertGreaterEqual(layout["wrapWidth"], layout["filterWidth"] - 32)
+
+
 class MobileStaticTests(unittest.TestCase):
     def test_viewport_meta(self):
         self.assertIn("width=device-width", server.PAGE)

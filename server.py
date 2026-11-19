@@ -162,6 +162,27 @@ PAGE = """<!doctype html>
     .filter:hover { background: #f1f5f8; }
     .filter[aria-pressed="true"] { background: #e4eff7; color: #194f78; }
     .count { min-width: 1.4em; text-align: center; font: .78rem var(--mono); }
+    .visually-hidden {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%);
+      white-space: nowrap; border: 0;
+    }
+    .search-wrap { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; min-width: 0; max-width: 100%; }
+    .search-wrap input[type="search"] {
+      flex: 1 1 auto; min-width: 0; max-width: 100%;
+      padding: 8px 12px; border: 1px solid #cbd7df; border-radius: 7px;
+      background: white; color: var(--ink); font: inherit; font-size: 16px;
+    }
+    .search-wrap input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+    .search-clear {
+      flex: 0 0 auto; width: 32px; height: 32px; padding: 0;
+      border: 1px solid #cbd7df; border-radius: 7px; background: white;
+      font-weight: 600; line-height: 1;
+    }
+    .search-clear[hidden] { display: none; }
+    .search-status { flex: 1 1 100%; margin: 0; color: var(--muted); font-size: .85rem; }
+    .search-status[hidden] { display: none; }
+    mark { background: #fff1a8; color: inherit; border-radius: 2px; }
     .column-menu { position: relative; margin-left: auto; }
     .columns-button {
       padding: 7px 12px; border: 1px solid #cbd7df; border-radius: 7px;
@@ -247,6 +268,7 @@ PAGE = """<!doctype html>
     .history table { border-left: 2px solid #b5cddb; }
     .history th { background: #e9eff3; }
     .history th:first-child { width: 170px; } .history th:nth-child(2) { width: 90px; }
+    .history tbody tr.hit { box-shadow: inset 4px 0 0 var(--accent); }
     .empty { padding: 44px 18px; color: var(--muted); text-align: center; }
     .notice { padding: 11px 14px; border-radius: 7px; color: #733f10; background: #fff0d7; }
     @media (max-width: 700px) {
@@ -270,6 +292,9 @@ PAGE = """<!doctype html>
       .refresh-info { flex-wrap: nowrap; width: 100%; }
       .refresh { min-height: 44px; min-width: 44px; padding: 10px 16px; touch-action: manipulation; }
       .filter-bar { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px; }
+      .search-wrap { width: 100%; flex-basis: 100%; }
+      .search-wrap input[type="search"] { min-height: 44px; font-size: 16px; touch-action: manipulation; }
+      .search-clear { width: 44px; height: 44px; min-width: 44px; min-height: 44px; touch-action: manipulation; }
       .bot-filter { width: 100%; min-height: 44px; }
       .bot-filter select { width: 100%; max-width: none; min-height: 44px; font-size: 16px; }
       .filters {
@@ -404,6 +429,12 @@ PAGE = """<!doctype html>
     <noscript>작업 목록을 보려면 자바스크립트를 켜 주세요.</noscript>
     <section class="board" aria-label="봇 작업 목록">
       <div class="filter-bar">
+        <div class="search-wrap">
+          <label class="visually-hidden" for="search">이벤트 키워드 검색</label>
+          <input type="search" id="search" placeholder="이벤트 키워드 검색 (공백으로 여러 단어, AND)" autocomplete="off" enterkeyhint="search" aria-label="이벤트 키워드 검색">
+          <button type="button" id="search-clear" class="search-clear" aria-label="검색어 지우기" hidden>×</button>
+        </div>
+        <p id="search-status" class="search-status" role="status" aria-live="polite" hidden></p>
         <label class="bot-filter">봇 <select id="bot-filter"><option value="">전체</option></select></label>
         <div class="filters" role="group" aria-label="작업 상태 필터">
           <button class="filter" type="button" data-status="전체" aria-pressed="true">전체 <span class="count">—</span></button>
@@ -447,21 +478,30 @@ PAGE = """<!doctype html>
     const columnsButton = document.getElementById("columns-button");
     const columnsPanel = document.getElementById("columns-panel");
     const columnsBackdrop = document.getElementById("columns-backdrop");
+    const searchInput = document.getElementById("search");
+    const searchClear = document.getElementById("search-clear");
+    const searchStatus = document.getElementById("search-status");
     const COLUMNS = [
       {key: "bot", label: "봇", colClass: "col-bot", width: 10,
-        cell: task => textCell(botName(task))},
+        cell: (task, expanded, keywords) => textCell(botName(task), keywords)},
       {key: "stage", label: "현재 단계", colClass: "col-stage", width: 8,
-        cell: task => stageCell(task.stage)},
+        cell: (task, expanded, keywords) => stageCell(task.stage, keywords)},
       {key: "title", label: "작업", colClass: "col-title", width: 23,
-        cell: (task, expanded) => {
+        cell: (task, expanded, keywords) => {
           const cell = element("td", "title-cell");
           const toggle = element("button", "task-toggle");
           toggle.type = "button";
           toggle.dataset.taskId = task.task_id;
           toggle.setAttribute("aria-expanded", String(expanded));
           const label = element("span", "task-label");
-          label.append(element("span", "task-id", task.task_id));
-          if (task.title) label.append(element("span", "task-title", task.title));
+          const idSpan = element("span", "task-id");
+          appendHighlightedText(idSpan, task.task_id, keywords);
+          label.append(idSpan);
+          if (task.title) {
+            const titleSpan = element("span", "task-title");
+            appendHighlightedText(titleSpan, task.title, keywords);
+            label.append(titleSpan);
+          }
           const caret = element("span", "caret");
           caret.setAttribute("aria-hidden", "true");
           toggle.append(caret, label);
@@ -469,13 +509,13 @@ PAGE = """<!doctype html>
           return cell;
         }},
       {key: "started", label: "시작", colClass: "col-time", width: 13,
-        cell: task => timeCell(task.started)},
+        cell: (task, expanded, keywords) => timeCell(task.started, keywords)},
       {key: "updated", label: "마지막 업데이트", colClass: "col-time", width: 13,
-        ariaSort: "descending", cell: task => timeCell(task.updated)},
+        ariaSort: "descending", cell: (task, expanded, keywords) => timeCell(task.updated, keywords)},
       {key: "note", label: "메모", colClass: "col-note", width: 18,
-        cell: task => textCell(task.note)},
+        cell: (task, expanded, keywords) => textCell(task.note, keywords)},
       {key: "next", label: "다음 할 일", colClass: "col-next", width: 15,
-        cell: task => textCell(task.next)},
+        cell: (task, expanded, keywords) => textCell(task.next, keywords)},
     ];
     const columnsByKey = new Map(COLUMNS.map(column => [column.key, column]));
     const STORAGE_KEY = "task-dashboard.columns";
@@ -484,6 +524,8 @@ PAGE = """<!doctype html>
     let selected = "전체";
     let expandedId = null;
     let loaded = false;
+    let searchQuery = "";
+    let searchDebounce = null;
 
     function defaultVisibleKeys() {
       return COLUMNS.map(column => column.key);
@@ -580,6 +622,92 @@ PAGE = """<!doctype html>
       }
     }
 
+    function normalizeSearchText(value) {
+      return String(value ?? "").normalize("NFC").toLowerCase();
+    }
+
+    function searchKeywordsFor(query) {
+      const text = String(query ?? "");
+      if (!text.trim()) return [];
+      return text.trim().split(/\\s+/).map(part => normalizeSearchText(part)).filter(part => part.length > 0);
+    }
+
+    function eventTsText(iso) {
+      if (!iso || typeof iso !== "string") return "";
+      return iso.slice(0, 16).replace("T", " ");
+    }
+
+    function eventSearchableText(event) {
+      if (!event || typeof event !== "object") return "";
+      const fields = [event.task_id, event.title, event.bot, event.stage, event.note, event.next, eventTsText(event.ts)];
+      return fields.map(value => typeof value === "string" ? value : value == null ? "" : String(value)).join(" ");
+    }
+
+    function searchEventMatches(event, keywords) {
+      if (!Array.isArray(keywords) || !keywords.length) return false;
+      const normalizedKeywords = keywords.map(keyword => normalizeSearchText(keyword)).filter(keyword => keyword.length > 0);
+      if (!normalizedKeywords.length) return false;
+      const haystack = normalizeSearchText(eventSearchableText(event));
+      return normalizedKeywords.every(keyword => haystack.includes(keyword));
+    }
+
+    function matchingEventsForTask(task, keywords) {
+      if (!task || !Array.isArray(task.events) || !Array.isArray(keywords) || !keywords.length) return [];
+      return task.events.filter(event => searchEventMatches(event, keywords));
+    }
+
+    function appendHighlightedText(parent, text, keywords) {
+      const original = String(text ?? "");
+      if (!parent) return;
+      const normalizedKeywords = Array.isArray(keywords)
+        ? keywords.map(keyword => normalizeSearchText(keyword)).filter(keyword => keyword.length > 0)
+        : [];
+      if (!normalizedKeywords.length || !original) {
+        if (original) parent.append(document.createTextNode(original));
+        return;
+      }
+      const haystack = normalizeSearchText(original);
+      const intervals = [];
+      for (const keyword of normalizedKeywords) {
+        let from = 0;
+        while (true) {
+          const index = haystack.indexOf(keyword, from);
+          if (index === -1) break;
+          intervals.push([index, index + keyword.length]);
+          from = index + 1;
+        }
+      }
+      if (!intervals.length) {
+        parent.append(document.createTextNode(original));
+        return;
+      }
+      intervals.sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]));
+      const merged = [];
+      for (const pair of intervals) {
+        const start = pair[0];
+        const end = pair[1];
+        const last = merged[merged.length - 1];
+        if (last && start < last[1]) {
+          if (end > last[1]) last[1] = end;
+        } else {
+          merged.push([start, end]);
+        }
+      }
+      let cursor = 0;
+      for (const pair of merged) {
+        const start = Math.min(pair[0], original.length);
+        const end = Math.min(pair[1], original.length);
+        if (start > cursor) parent.append(document.createTextNode(original.slice(cursor, start)));
+        if (end > start) {
+          const mark = document.createElement("mark");
+          mark.append(document.createTextNode(original.slice(start, end)));
+          parent.append(mark);
+        }
+        cursor = Math.max(cursor, end);
+      }
+      if (cursor < original.length) parent.append(document.createTextNode(original.slice(cursor)));
+    }
+
     function element(tag, className, text) {
       const node = document.createElement(tag);
       if (className) node.className = className;
@@ -598,30 +726,48 @@ PAGE = """<!doctype html>
       node.textContent = iso.slice(0, 16).replace("T", " ");
     }
 
-    function timeCell(iso) {
+    function timeCell(iso, keywords) {
       const cell = element("td");
       const time = element("time");
-      setTime(time, iso);
+      if (!iso || typeof iso !== "string") {
+        time.removeAttribute("datetime");
+        appendHighlightedText(time, "—", keywords);
+      } else {
+        time.dateTime = iso;
+        appendHighlightedText(time, iso.slice(0, 16).replace("T", " "), keywords);
+      }
       cell.append(time);
       return cell;
     }
 
-    function stageCell(stage) {
+    function stageCell(stage, keywords) {
       const styles = {접수: "intake", 완료: "done", 막힘: "blocked", 계획: "check", 리뷰: "check", 점검: "check"};
       const cell = element("td");
-      cell.append(element("span", "badge " + (styles[stage] || ""), stage));
+      const badge = element("span", "badge " + (styles[stage] || ""));
+      const inner = element("span");
+      appendHighlightedText(inner, stage ?? "", keywords);
+      badge.append(inner);
+      cell.append(badge);
       return cell;
     }
 
-    function textCell(value) {
-      return element("td", "free-text", value || "—");
+    function textCell(value, keywords) {
+      const cell = element("td", "free-text");
+      const inner = element("span");
+      appendHighlightedText(inner, value || "—", keywords);
+      cell.append(inner);
+      return cell;
     }
 
-    function historyRow(task, id) {
+    function historyRow(task, id, options) {
       const row = element("tr", "history");
       row.id = id;
       const cell = element("td");
       cell.colSpan = visible.size;
+      const events = options && Array.isArray(options.events) ? options.events : (task && Array.isArray(task.events) ? task.events : []);
+      const heading = options && typeof options.heading === "string" ? options.heading : "이벤트 이력";
+      const keywords = options && Array.isArray(options.keywords) ? options.keywords : null;
+      const hitSet = options && options.hitSet instanceof Set ? options.hitSet : null;
       const table = element("table");
       table.setAttribute("aria-label", "이벤트 이력");
       const header = table.createTHead().insertRow();
@@ -631,14 +777,18 @@ PAGE = """<!doctype html>
         header.append(th);
       }
       const body = table.createTBody();
-      for (const event of task.events) {
-        const time = timeCell(event.ts); time.dataset.label = "시각";
-        const stage = stageCell(event.stage); stage.dataset.label = "단계";
-        const note = textCell(event.note); note.dataset.label = "메모";
-        const next = textCell(event.next); next.dataset.label = "다음 할 일";
-        body.insertRow().append(time, stage, note, next);
+      for (const event of events) {
+        const isHit = hitSet ? hitSet.has(event) : Boolean(keywords && keywords.length && searchEventMatches(event, keywords));
+        const activeKeywords = isHit ? keywords : null;
+        const eventRow = body.insertRow();
+        if (isHit && activeKeywords && activeKeywords.length) eventRow.classList.add("hit");
+        const time = timeCell(event.ts, activeKeywords); time.dataset.label = "시각";
+        const stage = stageCell(event.stage, activeKeywords); stage.dataset.label = "단계";
+        const note = textCell(event.note, activeKeywords); note.dataset.label = "메모";
+        const next = textCell(event.next, activeKeywords); next.dataset.label = "다음 할 일";
+        eventRow.append(time, stage, note, next);
       }
-      cell.append(element("h2", "", "이벤트 이력"), table);
+      cell.append(element("h2", "", heading), table);
       row.append(cell);
       return row;
     }
@@ -882,16 +1032,92 @@ PAGE = """<!doctype html>
       columnsBackdrop.hidden = !open;
     }
 
+    function readSearchQueryFromUrl() {
+      try {
+        return new URLSearchParams(location.search).get("q") ?? "";
+      } catch {
+        return "";
+      }
+    }
+
+    function updateSearchUrl() {
+      try {
+        const url = new URL(location.href);
+        if (searchQuery && searchQuery.trim()) {
+          url.searchParams.set("q", searchQuery);
+        } else {
+          url.searchParams.delete("q");
+        }
+        history.replaceState(null, "", url.pathname + url.search + url.hash);
+      } catch {
+        // 파일 URL 등 replaceState가 막힌 환경에서는 목록 동작만 유지한다.
+      }
+    }
+
+    function updateSearchClearVisibility() {
+      if (!searchInput || !searchClear) return;
+      searchClear.hidden = !searchInput.value;
+    }
+
+    function applySearchFromInput() {
+      searchQuery = searchInput ? searchInput.value : "";
+      updateSearchClearVisibility();
+      updateSearchUrl();
+      render();
+    }
+
+    function scheduleSearchApply() {
+      if (searchDebounce) clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => {
+        searchDebounce = null;
+        applySearchFromInput();
+      }, 200);
+    }
+
+    function clearSearch() {
+      if (searchDebounce) {
+        clearTimeout(searchDebounce);
+        searchDebounce = null;
+      }
+      if (searchInput) searchInput.value = "";
+      searchQuery = "";
+      updateSearchClearVisibility();
+      updateSearchUrl();
+      render();
+    }
+
     function render() {
+      const keywords = searchKeywordsFor(searchQuery);
+      const searchActive = keywords.length > 0;
       const botTasks = botFilter.value ? tasks.filter(task => botName(task) === botFilter.value) : tasks;
+      const searchFiltered = searchActive
+        ? botTasks.filter(task => matchingEventsForTask(task, keywords).length > 0)
+        : botTasks;
       for (const button of filters) {
         const status = button.dataset.status;
-        const count = status === "전체" ? botTasks.length : botTasks.filter(t => t.status === status).length;
+        const count = status === "전체" ? searchFiltered.length : searchFiltered.filter(t => t.status === status).length;
         button.querySelector(".count").textContent = loaded ? count : "—";
         button.setAttribute("aria-pressed", String(status === selected));
       }
-      if (!loaded) return;
-      const matching = sortTasks(botTasks.filter(task => selected === "전체" || task.status === selected));
+      if (!loaded) {
+        if (searchStatus) {
+          searchStatus.hidden = true;
+          searchStatus.textContent = "";
+        }
+        return;
+      }
+      const matching = sortTasks(searchFiltered.filter(task => selected === "전체" || task.status === selected));
+      if (searchStatus) {
+        if (searchActive) {
+          let eventTotal = 0;
+          for (const task of matching) eventTotal += matchingEventsForTask(task, keywords).length;
+          searchStatus.textContent = `검색어 "${searchQuery.trim()}": ${matching.length}개 작업, ${eventTotal}개 이벤트 일치`;
+          searchStatus.hidden = false;
+        } else {
+          searchStatus.textContent = "";
+          searchStatus.hidden = true;
+        }
+      }
       const fragment = document.createDocumentFragment();
       const focusedId = document.activeElement?.dataset.taskId;
       const titleHidden = !visible.has("title");
@@ -914,7 +1140,7 @@ PAGE = """<!doctype html>
           });
         }
         for (const column of visibleColumns()) {
-          const cell = column.cell(task, expanded);
+          const cell = column.cell(task, expanded, keywords);
           cell.dataset.label = column.label;
           cell.dataset.column = column.key;
           row.append(cell);
@@ -928,12 +1154,35 @@ PAGE = """<!doctype html>
         if (expanded) {
           const id = "history-" + index;
           if (toggle) toggle.setAttribute("aria-controls", id);
-          fragment.append(historyRow(task, id));
+          if (titleHidden) row.setAttribute("aria-controls", id);
+          if (searchActive) {
+            const matched = matchingEventsForTask(task, keywords);
+            fragment.append(historyRow(task, id, {
+              keywords: keywords,
+              hitSet: new Set(matched),
+            }));
+          } else {
+            fragment.append(historyRow(task, id));
+          }
+        } else if (searchActive) {
+          const matched = matchingEventsForTask(task, keywords);
+          if (matched.length) {
+            const id = "history-" + index;
+            if (toggle) toggle.setAttribute("aria-controls", id);
+            if (titleHidden) row.setAttribute("aria-controls", id);
+            const total = Array.isArray(task.events) ? task.events.length : 0;
+            fragment.append(historyRow(task, id, {
+              events: matched,
+              heading: `일치한 이벤트 ${matched.length}개 (전체 ${total}개)`,
+              keywords: keywords,
+              hitSet: new Set(matched),
+            }));
+          }
         }
         if (task.task_id === focusedId) restoreFocus = titleHidden ? row : toggle;
       }
       if (!matching.length) {
-        fragment.append(emptyRow(selected === "전체" ? "등록된 작업이 없습니다." : "이 상태의 작업이 없습니다."));
+        fragment.append(emptyRow(searchActive ? "일치하는 이벤트가 없습니다." : (selected === "전체" ? "등록된 작업이 없습니다." : "이 상태의 작업이 없습니다.")));
       }
       rows.replaceChildren(fragment);
       if (restoreFocus) restoreFocus.focus({preventScroll: true});
@@ -947,6 +1196,39 @@ PAGE = """<!doctype html>
     }
 
     botFilter.addEventListener("change", render);
+
+    if (searchInput) {
+      searchInput.addEventListener("input", () => {
+        updateSearchClearVisibility();
+        scheduleSearchApply();
+      });
+      searchInput.addEventListener("keydown", event => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          if (searchDebounce) {
+            clearTimeout(searchDebounce);
+            searchDebounce = null;
+          }
+          applySearchFromInput();
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          clearSearch();
+        }
+      });
+    }
+    if (searchClear) {
+      searchClear.addEventListener("click", () => {
+        clearSearch();
+      });
+    }
+    window.addEventListener("popstate", () => {
+      const nextQuery = readSearchQueryFromUrl();
+      if (searchInput && searchInput.value !== nextQuery) searchInput.value = nextQuery;
+      searchQuery = nextQuery;
+      updateSearchClearVisibility();
+      render();
+    });
 
     async function refresh() {
       if (refreshButton.disabled) return;
@@ -1013,6 +1295,10 @@ PAGE = """<!doctype html>
 
     buildColumnPanel();
     applyColumnsToHeader();
+
+    searchQuery = readSearchQueryFromUrl();
+    if (searchInput) searchInput.value = searchQuery;
+    updateSearchClearVisibility();
 
     refreshButton.addEventListener("click", refresh);
     refresh();
