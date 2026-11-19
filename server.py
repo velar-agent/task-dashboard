@@ -37,7 +37,10 @@ def read_event(line):
 
 
 def load_tasks(path):
-    """유효한 이벤트를 시각순으로 접고 최근 업데이트된 작업부터 반환한다."""
+    """유효한 이벤트를 시각순으로 접고 최근 업데이트된 작업부터 반환한다.
+
+    완료 작업은 업데이트가 가장 최근이어도 항상 뒤에 둔다. 막힘은 앞 그룹에 남는다.
+    """
     groups = {}
     skipped = 0
     first_invalid = None
@@ -84,7 +87,9 @@ def load_tasks(path):
             "next": latest["next"],
             "events": events,
         })
-    return sorted(tasks, key=itemgetter("updated"), reverse=True)
+    tasks.sort(key=itemgetter("updated"), reverse=True)
+    # 완료는 항상 뒤로(그룹 안에서는 업데이트 내림차순 유지). 막힘은 앞 그룹에 남는다.
+    return [task for task in tasks if task["stage"] != "완료"] + [task for task in tasks if task["stage"] == "완료"]
 
 
 PAGE = """<!doctype html>
@@ -221,11 +226,7 @@ PAGE = """<!doctype html>
     }
     .expanded .caret { transform: translateY(-4px) rotate(45deg); }
     .task-label { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; min-width: 0; }
-    .task-id {
-      display: inline-block; max-width: 100%; padding: 2px 8px; border: 1px solid #cbd7df;
-      border-radius: 999px; background: #e4eff7; color: #194f78;
-      font: 650 .85rem/1.4 var(--mono); letter-spacing: .01em; overflow-wrap: anywhere;
-    }
+    .task-id { display: block; font-weight: 700; overflow-wrap: anywhere; }
     .task-title { display: block; overflow-wrap: anywhere; font-weight: 400; }
     .free-text { white-space: pre-wrap; overflow-wrap: anywhere; }
     .columns-backdrop { display: none; }
@@ -655,6 +656,18 @@ PAGE = """<!doctype html>
       return name || "(미지정)";
     }
 
+    function isCompletedTask(task) {
+      return task.stage === "완료" || task.status === "완료";
+    }
+
+    function sortTasks(list, compare) {
+      // 기본 비교기는 서버 순서와 같다(마지막 업데이트 내림차순).
+      // 완료 파티션은 항상 마지막에 적용하므로 어떤 열 정렬이 와도 완료는 뒤에 남는다.
+      const comparator = compare || ((a, b) => String(b.updated || "").localeCompare(String(a.updated || "")));
+      const ordered = [...list].sort(comparator);
+      return [...ordered.filter(task => !isCompletedTask(task)), ...ordered.filter(isCompletedTask)];
+    }
+
     function updateBotOptions() {
       const previous = botFilter.value;
       const names = new Set(tasks.map(botName));
@@ -878,7 +891,7 @@ PAGE = """<!doctype html>
         button.setAttribute("aria-pressed", String(status === selected));
       }
       if (!loaded) return;
-      const matching = botTasks.filter(task => selected === "전체" || task.status === selected);
+      const matching = sortTasks(botTasks.filter(task => selected === "전체" || task.status === selected));
       const fragment = document.createDocumentFragment();
       const focusedId = document.activeElement?.dataset.taskId;
       const titleHidden = !visible.has("title");

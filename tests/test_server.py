@@ -72,6 +72,31 @@ class DashboardTests(unittest.TestCase):
         statuses = {task["task_id"]: task["status"] for task in tasks}
         self.assertEqual(statuses, {s: s if s in ("완료", "막힘") else "진행 중" for s in stages})
 
+    def test_completed_always_last_with_updated_desc_within_groups(self):
+        # 완료는 업데이트가 가장 최근이어도 항상 뒤. 막힘은 앞 그룹에 남는다.
+        self.write_events(
+            event("done-old", "2026-11-18T08:00:00+09:00", "완료"),
+            event("active-old", "2026-11-18T09:00:00+09:00", "코딩"),
+            event("blocked", "2026-11-18T14:00:00+09:00", "막힘"),
+            event("active-new", "2026-11-18T15:00:00+09:00", "리뷰"),
+            event("done-new", LATE, "완료"),
+        )
+        tasks = server.load_tasks(self.path)
+        self.assertEqual(
+            [task["task_id"] for task in tasks],
+            ["active-new", "blocked", "active-old", "done-new", "done-old"],
+        )
+        self.assertEqual(
+            [(task["task_id"], task["stage"], task["status"]) for task in tasks],
+            [
+                ("active-new", "리뷰", "진행 중"),
+                ("blocked", "막힘", "막힘"),
+                ("active-old", "코딩", "진행 중"),
+                ("done-new", "완료", "완료"),
+                ("done-old", "완료", "완료"),
+            ],
+        )
+
     def test_intake_then_plan_folds_into_one_in_progress_task(self):
         self.write_events(
             event("a", EARLY, "접수", bot="Engineering", title="막 받은 요청"),

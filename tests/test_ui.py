@@ -186,9 +186,13 @@ class DashboardUITests(unittest.TestCase):
               taskIdNode.getBoundingClientRect().top < taskTitleNode.getBoundingClientRect().top,
               taskIdNode.querySelectorAll("*").length, taskTitleNode.querySelectorAll("*").length];
             const taskIdComputed = getComputedStyle(taskIdNode);
+            const taskTitleComputed = getComputedStyle(taskTitleNode);
             observations.taskIdStyle = [taskIdComputed.fontFamily, taskIdComputed.fontSize,
               taskIdComputed.color, taskIdComputed.backgroundColor, taskIdComputed.borderRadius,
-              taskIdComputed.borderStyle];
+              taskIdComputed.borderStyle, taskIdComputed.fontWeight, taskIdComputed.borderWidth,
+              taskIdComputed.padding, taskIdComputed.letterSpacing,
+              taskTitleComputed.fontFamily, taskTitleComputed.fontSize, taskTitleComputed.color,
+              taskTitleComputed.fontWeight, taskTitleComputed.letterSpacing];
             const unnamedToggle = [...document.querySelectorAll(".task-toggle")]
               .find(node => node.dataset.taskId === "unnamed");
             observations.unnamedTask = [unnamedToggle.textContent,
@@ -234,13 +238,19 @@ class DashboardUITests(unittest.TestCase):
                     ["메모", "col-note", "구현 중"], ["다음 할 일", "col-next", "리뷰 요청"],
                 ])
                 self.assertEqual(data["taskOrder"], ["active", "기능 구현", ["task-id", "task-title"], True, 0, 0])
-                font_family, font_size, color, background, radius, border = data["taskIdStyle"]
-                self.assertIn("monospace", font_family.lower())
-                self.assertGreaterEqual(float(font_size.removesuffix("px")), 13)
-                self.assertEqual(color, "rgb(25, 79, 120)")
-                self.assertEqual(background, "rgb(228, 239, 247)")
-                self.assertEqual(radius, "999px")
-                self.assertEqual(border, "solid")
+                font_family, font_size, color, background, radius, border, weight, border_width, padding, spacing, title_family, title_size, title_color, title_weight, title_spacing = data["taskIdStyle"]
+                self.assertEqual(weight, "700")
+                self.assertEqual(title_weight, "400")
+                self.assertEqual(background, "rgba(0, 0, 0, 0)")
+                self.assertEqual(border_width, "0px")
+                self.assertEqual(border, "none")
+                self.assertEqual(radius, "0px")
+                self.assertEqual(padding, "0px")
+                self.assertNotIn("monospace", font_family.lower())
+                self.assertEqual(font_family, title_family)
+                self.assertEqual(font_size, title_size)
+                self.assertEqual(color, title_color)
+                self.assertEqual(spacing, title_spacing)
                 self.assertEqual(data["unnamedTask"], ["unnamed", 1, 0, "unnamed"])
                 self.assertEqual(data["markupTask"], ["<i>x</i>", "<b>y</b>", 0])
                 self.assertEqual(data["open"], ["active", "true", True, 7])
@@ -606,6 +616,14 @@ class DashboardUITests(unittest.TestCase):
             const reset = () => panel.querySelector(".reset-order");
             observations.idWeight = getComputedStyle(document.querySelector(".task-id")).fontWeight;
             observations.titleWeight = getComputedStyle(document.querySelector(".task-title")).fontWeight;
+            const idComputed = getComputedStyle(document.querySelector(".task-id"));
+            const titleComputed = getComputedStyle(document.querySelector(".task-title"));
+            observations.idStyle = [idComputed.fontFamily, idComputed.fontSize,
+              idComputed.color, idComputed.backgroundColor, idComputed.borderRadius,
+              idComputed.borderStyle, idComputed.fontWeight, idComputed.borderWidth,
+              idComputed.padding, idComputed.letterSpacing,
+              titleComputed.fontFamily, titleComputed.fontSize, titleComputed.color,
+              titleComputed.fontWeight, titleComputed.letterSpacing];
             observations.initial = [panelKeys(), headersOf(), colsOf(), firstCellsOf(), rowCounts(),
               moveButton("bot", "up").disabled, moveButton("next", "down").disabled,
               moveButton("bot", "down").disabled, moveButton("next", "up").disabled,
@@ -654,8 +672,21 @@ class DashboardUITests(unittest.TestCase):
         for width in (1280, 390):
             with self.subTest(width=width):
                 data = self.observe_page(exercise, width)
-                self.assertEqual(data["idWeight"], "650")
+                self.assertEqual(data["idWeight"], "700")
                 self.assertEqual(data["titleWeight"], "400")
+                font_family, font_size, color, background, radius, border, weight, border_width, padding, spacing, title_family, title_size, title_color, title_weight, title_spacing = data["idStyle"]
+                self.assertEqual(weight, "700")
+                self.assertEqual(title_weight, "400")
+                self.assertEqual(background, "rgba(0, 0, 0, 0)")
+                self.assertEqual(border_width, "0px")
+                self.assertEqual(border, "none")
+                self.assertEqual(radius, "0px")
+                self.assertEqual(padding, "0px")
+                self.assertNotIn("monospace", font_family.lower())
+                self.assertEqual(font_family, title_family)
+                self.assertEqual(font_size, title_size)
+                self.assertEqual(color, title_color)
+                self.assertEqual(spacing, title_spacing)
                 default = ["bot", "stage", "title", "started", "updated", "note", "next"]
                 moved = ["stage", "bot", "title", "started", "updated", "note", "next"]
                 moved2 = ["stage", "title", "bot", "started", "updated", "note", "next"]
@@ -1242,6 +1273,64 @@ class DashboardUITests(unittest.TestCase):
         self.assertEqual(data["reopened"], [False, False])
         self.assertEqual(data["afterOutside"], [True, True])
         self.assertEqual(data["afterEscape"], [True, True, "columns-button"])
+
+    def test_completed_always_last_after_render(self):
+        exercise = """
+            const t = (id, stage, updated) => ({task_id: id, bot: "Engineering", title: id, stage,
+              status: stage === "완료" ? "완료" : stage === "막힘" ? "막힘" : "진행 중",
+              started: stamp, updated, events: []});
+            snapshot.tasks = [
+              t("done-new", "완료", "2026-11-18T16:30:00+09:00"),
+              t("active-old", "코딩", "2026-11-18T09:00:00+09:00"),
+              t("done-old", "완료", "2026-11-18T08:00:00+09:00"),
+              t("active-new", "코딩", "2026-11-18T15:00:00+09:00"),
+              t("blocked", "막힘", "2026-11-18T14:00:00+09:00"),
+            ];
+            await tick();
+            observations.domOrder = [...document.querySelectorAll(".task-toggle")]
+              .map(node => node.dataset.taskId);
+            observations.hasHelper = [typeof window.sortTasks === "function", typeof sortTasks === "function"];
+            const mixed = [
+              t("done-new", "완료", "2026-11-18T16:30:00+09:00"),
+              t("active-old", "코딩", "2026-11-18T09:00:00+09:00"),
+              t("done-old", "완료", "2026-11-18T08:00:00+09:00"),
+              t("active-new", "코딩", "2026-11-18T15:00:00+09:00"),
+              t("blocked", "막힘", "2026-11-18T14:00:00+09:00"),
+            ];
+            observations.defaultOrder = sortTasks(mixed).map(task => task.task_id);
+            observations.ascending = sortTasks(mixed,
+              (a, b) => String(a.updated).localeCompare(String(b.updated))).map(task => task.task_id);
+            observations.descending = sortTasks(mixed,
+              (a, b) => String(b.updated).localeCompare(String(a.updated))).map(task => task.task_id);
+            observations.reversedInput = sortTasks([...mixed].reverse()).map(task => task.task_id);
+            observations.inputKept = mixed.map(task => task.task_id);
+            const active = t("only-active", "코딩", "2026-11-18T08:00:00+09:00");
+            const statusDone = {task_id: "status-done", bot: "Engineering", title: "s",
+              stage: "코딩", status: "완료", started: stamp,
+              updated: "2026-11-18T16:30:00+09:00", events: []};
+            const stageDone = {task_id: "stage-done", bot: "Engineering", title: "s",
+              stage: "완료", status: "진행 중", started: stamp,
+              updated: "2026-11-18T16:30:00+09:00", events: []};
+            observations.statusLast = sortTasks([statusDone, active]).map(task => task.task_id);
+            observations.stageLast = sortTasks([stageDone, active]).map(task => task.task_id);
+        """
+        expected_desc = ["active-new", "blocked", "active-old", "done-new", "done-old"]
+        expected_asc = ["active-old", "blocked", "active-new", "done-old", "done-new"]
+        for width in (1280, 390):
+            with self.subTest(width=width):
+                data = self.observe_page(exercise, width)
+                self.assertEqual(data["hasHelper"], [True, True])
+                self.assertEqual(data["domOrder"], expected_desc)
+                self.assertEqual(data["defaultOrder"], expected_desc)
+                self.assertEqual(data["ascending"], expected_asc)
+                self.assertEqual(data["descending"], expected_desc)
+                self.assertEqual(data["reversedInput"], expected_desc)
+                self.assertEqual(
+                    data["inputKept"],
+                    ["done-new", "active-old", "done-old", "active-new", "blocked"],
+                )
+                self.assertEqual(data["statusLast"], ["only-active", "status-done"])
+                self.assertEqual(data["stageLast"], ["only-active", "stage-done"])
 
 
 class MobileStaticTests(unittest.TestCase):
