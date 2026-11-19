@@ -407,7 +407,6 @@ PAGE = """<!doctype html>
     .expanded .caret { transform: translateY(-4px) rotate(45deg); }
     .task-label { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; min-width: 0; }
     .task-id { display: block; font-weight: 700; overflow-wrap: anywhere; }
-    .task-title { display: block; overflow-wrap: anywhere; font-weight: 400; }
     .free-text { white-space: pre-wrap; overflow-wrap: anywhere; }
     .columns-backdrop { display: none; }
     .columns-backdrop[hidden] { display: none; }
@@ -542,7 +541,6 @@ PAGE = """<!doctype html>
       .tasks tbody tr.task-row > td.title-cell::before { content: none; display: none; }
       .task-toggle { width: 100%; min-height: 44px; touch-action: manipulation; }
       .task-id { overflow-wrap: anywhere; }
-      .task-title { overflow-wrap: anywhere; white-space: normal; }
       .free-text { white-space: pre-wrap; overflow-wrap: anywhere; }
       .tasks td.empty {
         display: block; text-align: left; padding: 12px 14px; margin: 10px 10px;
@@ -583,7 +581,7 @@ PAGE = """<!doctype html>
         min-height: 44px; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
       }
       .bot-filter select { min-height: 44px; }
-      .task-id, .task-title, .tasks tbody tr.task-row > td { word-break: normal; }
+      .task-id, .tasks tbody tr.task-row > td { word-break: normal; }
     }
   </style>
 </head>
@@ -670,13 +668,9 @@ PAGE = """<!doctype html>
           toggle.setAttribute("aria-expanded", String(expanded));
           const label = element("span", "task-label");
           const idSpan = element("span", "task-id");
+          if (task.title) idSpan.setAttribute("title", task.title);
           appendHighlightedText(idSpan, task.task_id, keywords);
           label.append(idSpan);
-          if (task.title) {
-            const titleSpan = element("span", "task-title");
-            appendHighlightedText(titleSpan, task.title, keywords);
-            label.append(titleSpan);
-          }
           const caret = element("span", "caret");
           caret.setAttribute("aria-hidden", "true");
           toggle.append(caret, label);

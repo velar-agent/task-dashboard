@@ -180,25 +180,25 @@ class DashboardUITests(unittest.TestCase):
 
             const titleToggle = cells[2].querySelector("button.task-toggle");
             const taskIdNode = titleToggle.querySelector(".task-id");
-            const taskTitleNode = titleToggle.querySelector(".task-title");
-            observations.taskOrder = [taskIdNode.textContent, taskTitleNode.textContent,
+            observations.taskOrder = [taskIdNode.textContent, taskIdNode.getAttribute("title"),
+              titleToggle.querySelectorAll(".task-title").length,
+              document.querySelectorAll(".task-title").length,
               [...titleToggle.querySelector(".task-label").children].map(node => node.className),
-              taskIdNode.getBoundingClientRect().top < taskTitleNode.getBoundingClientRect().top,
-              taskIdNode.querySelectorAll("*").length, taskTitleNode.querySelectorAll("*").length];
+              taskIdNode.querySelectorAll("*").length, titleToggle.textContent,
+              titleToggle.getAttribute("aria-label")];
             const taskIdComputed = getComputedStyle(taskIdNode);
-            const taskTitleComputed = getComputedStyle(taskTitleNode);
             observations.taskIdStyle = [taskIdComputed.fontFamily, taskIdComputed.fontSize,
               taskIdComputed.color, taskIdComputed.backgroundColor, taskIdComputed.borderRadius,
               taskIdComputed.borderStyle, taskIdComputed.fontWeight, taskIdComputed.borderWidth,
-              taskIdComputed.padding, taskIdComputed.letterSpacing,
-              taskTitleComputed.fontFamily, taskTitleComputed.fontSize, taskTitleComputed.color,
-              taskTitleComputed.fontWeight, taskTitleComputed.letterSpacing];
+              taskIdComputed.padding, taskIdComputed.letterSpacing];
             const unnamedToggle = [...document.querySelectorAll(".task-toggle")]
               .find(node => node.dataset.taskId === "unnamed");
             observations.unnamedTask = [unnamedToggle.textContent,
               unnamedToggle.querySelectorAll(".task-id").length,
               unnamedToggle.querySelectorAll(".task-title").length,
-              unnamedToggle.querySelector(".task-id")?.textContent];
+              unnamedToggle.querySelector(".task-id")?.textContent,
+              unnamedToggle.querySelector(".task-id")?.getAttribute("title"),
+              unnamedToggle.querySelector(".task-id")?.hasAttribute("title")];
 
             const toggle = cells[2].querySelector("button.task-toggle");
             toggle.focus();
@@ -208,6 +208,8 @@ class DashboardUITests(unittest.TestCase):
             const focused = document.activeElement;
             observations.open = [focused.dataset.taskId, focused.getAttribute("aria-expanded"),
                                  focused.getAttribute("aria-controls") === history.id, history.cells[0].colSpan];
+            observations.openHistoryTitle = [history.querySelector(".summary-id")?.textContent,
+              history.querySelector(".summary-title")?.textContent];
             focused.click();
             observations.closed = [document.activeElement.dataset.taskId, document.activeElement.getAttribute("aria-expanded"),
                                    table.querySelector(".history") === null];
@@ -217,7 +219,8 @@ class DashboardUITests(unittest.TestCase):
             const markupToggle = [...document.querySelectorAll(".task-toggle")]
               .find(node => node.dataset.taskId === "<i>x</i>");
             observations.markupTask = [markupToggle.querySelector(".task-id")?.textContent,
-              markupToggle.querySelector(".task-title")?.textContent,
+              markupToggle.querySelector(".task-id")?.getAttribute("title"),
+              markupToggle.querySelectorAll(".task-title").length,
               markupToggle.querySelectorAll("b, i").length];
         """
         for width in (1280, 390):
@@ -233,26 +236,22 @@ class DashboardUITests(unittest.TestCase):
                 self.assertEqual(data["sortedBy"], "마지막 업데이트")
                 self.assertEqual(data["columns"], [
                     ["봇", "col-bot", "Engineering"], ["현재 단계", "col-stage", "코딩"],
-                    ["작업", "col-title", "active기능 구현"], ["시작", "col-time", "2026-11-18 10:00"],
+                    ["작업", "col-title", "active"], ["시작", "col-time", "2026-11-18 10:00"],
                     ["마지막 업데이트", "col-time", "2026-11-18 12:00"],
                     ["메모", "col-note", "구현 중"], ["다음 할 일", "col-next", "리뷰 요청"],
                 ])
-                self.assertEqual(data["taskOrder"], ["active", "기능 구현", ["task-id", "task-title"], True, 0, 0])
-                font_family, font_size, color, background, radius, border, weight, border_width, padding, spacing, title_family, title_size, title_color, title_weight, title_spacing = data["taskIdStyle"]
+                self.assertEqual(data["taskOrder"], ["active", "기능 구현", 0, 0, ["task-id"], 0, "active", None])
+                font_family, font_size, color, background, radius, border, weight, border_width, padding, spacing = data["taskIdStyle"]
                 self.assertEqual(weight, "700")
-                self.assertEqual(title_weight, "400")
                 self.assertEqual(background, "rgba(0, 0, 0, 0)")
                 self.assertEqual(border_width, "0px")
                 self.assertEqual(border, "none")
                 self.assertEqual(radius, "0px")
                 self.assertEqual(padding, "0px")
                 self.assertNotIn("monospace", font_family.lower())
-                self.assertEqual(font_family, title_family)
-                self.assertEqual(font_size, title_size)
-                self.assertEqual(color, title_color)
-                self.assertEqual(spacing, title_spacing)
-                self.assertEqual(data["unnamedTask"], ["unnamed", 1, 0, "unnamed"])
-                self.assertEqual(data["markupTask"], ["<i>x</i>", "<b>y</b>", 0])
+                self.assertEqual(data["unnamedTask"], ["unnamed", 1, 0, "unnamed", None, False])
+                self.assertEqual(data["markupTask"], ["<i>x</i>", "<b>y</b>", 0, 0])
+                self.assertEqual(data["openHistoryTitle"], ["active", "기능 구현"])
                 self.assertEqual(data["open"], ["active", "true", True, 7])
                 self.assertEqual(data["closed"], ["active", "false", True])
 
@@ -440,7 +439,7 @@ class DashboardUITests(unittest.TestCase):
                 self.assertEqual(data["labelMarks"], 0)
                 self.assertEqual(data["initial"][0], ["봇", "현재 단계", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"])
                 self.assertEqual(data["initial"][1], ["col-bot", "col-stage", "col-title", "col-time", "col-time", "col-note", "col-next"])
-                self.assertEqual(data["initial"][2], ["Engineering", "코딩", "active기능 구현", "2026-11-18 10:00", "2026-11-18 12:00", "구현 중", "리뷰 요청"])
+                self.assertEqual(data["initial"][2], ["Engineering", "코딩", "active", "2026-11-18 10:00", "2026-11-18 12:00", "구현 중", "리뷰 요청"])
                 self.assertEqual(data["initial"][3], [7, 7, 7, 7])
                 self.assertEqual([key for key, checked, disabled in data["initial"][4]],
                                  ["bot", "stage", "title", "started", "updated", "note", "next"])
@@ -451,7 +450,7 @@ class DashboardUITests(unittest.TestCase):
                 self.assertTrue(all(data["noOverflow"]))
                 self.assertEqual(data["hidden"][0], ["봇", "작업", "시작", "마지막 업데이트", "다음 할 일"])
                 self.assertEqual(data["hidden"][1], ["col-bot", "col-title", "col-time", "col-time", "col-next"])
-                self.assertEqual(data["hidden"][2], ["Engineering", "active기능 구현", "2026-11-18 10:00", "2026-11-18 12:00", "리뷰 요청"])
+                self.assertEqual(data["hidden"][2], ["Engineering", "active", "2026-11-18 10:00", "2026-11-18 12:00", "리뷰 요청"])
                 self.assertEqual(data["hidden"][3], [5, 5, 5, 5])
                 self.assertEqual(data["hidden"][4], 5)
                 self.assertEqual(dict(data["hidden"][5]),
@@ -696,15 +695,13 @@ class DashboardUITests(unittest.TestCase):
               `.column-item[data-column="${key}"] button[data-direction="${direction}"]`);
             const reset = () => panel.querySelector(".reset-order");
             observations.idWeight = getComputedStyle(document.querySelector(".task-id")).fontWeight;
-            observations.titleWeight = getComputedStyle(document.querySelector(".task-title")).fontWeight;
+            observations.noTaskTitle = document.querySelectorAll(".task-title").length;
+            observations.idTitle = document.querySelector(".task-id")?.getAttribute("title");
             const idComputed = getComputedStyle(document.querySelector(".task-id"));
-            const titleComputed = getComputedStyle(document.querySelector(".task-title"));
             observations.idStyle = [idComputed.fontFamily, idComputed.fontSize,
               idComputed.color, idComputed.backgroundColor, idComputed.borderRadius,
               idComputed.borderStyle, idComputed.fontWeight, idComputed.borderWidth,
-              idComputed.padding, idComputed.letterSpacing,
-              titleComputed.fontFamily, titleComputed.fontSize, titleComputed.color,
-              titleComputed.fontWeight, titleComputed.letterSpacing];
+              idComputed.padding, idComputed.letterSpacing];
             observations.initial = [panelKeys(), headersOf(), colsOf(), firstCellsOf(), rowCounts(),
               moveButton("bot", "up").disabled, moveButton("next", "down").disabled,
               moveButton("bot", "down").disabled, moveButton("next", "up").disabled,
@@ -754,20 +751,16 @@ class DashboardUITests(unittest.TestCase):
             with self.subTest(width=width):
                 data = self.observe_page(exercise, width)
                 self.assertEqual(data["idWeight"], "700")
-                self.assertEqual(data["titleWeight"], "400")
-                font_family, font_size, color, background, radius, border, weight, border_width, padding, spacing, title_family, title_size, title_color, title_weight, title_spacing = data["idStyle"]
+                self.assertEqual(data["noTaskTitle"], 0)
+                self.assertEqual(data["idTitle"], "기능 구현")
+                font_family, font_size, color, background, radius, border, weight, border_width, padding, spacing = data["idStyle"]
                 self.assertEqual(weight, "700")
-                self.assertEqual(title_weight, "400")
                 self.assertEqual(background, "rgba(0, 0, 0, 0)")
                 self.assertEqual(border_width, "0px")
                 self.assertEqual(border, "none")
                 self.assertEqual(radius, "0px")
                 self.assertEqual(padding, "0px")
                 self.assertNotIn("monospace", font_family.lower())
-                self.assertEqual(font_family, title_family)
-                self.assertEqual(font_size, title_size)
-                self.assertEqual(color, title_color)
-                self.assertEqual(spacing, title_spacing)
                 default = ["bot", "stage", "title", "started", "updated", "note", "next"]
                 moved = ["stage", "bot", "title", "started", "updated", "note", "next"]
                 moved2 = ["stage", "title", "bot", "started", "updated", "note", "next"]
@@ -777,7 +770,7 @@ class DashboardUITests(unittest.TestCase):
                 self.assertEqual(data["initial"][2],
                                  ["col-bot", "col-stage", "col-title", "col-time", "col-time", "col-note", "col-next"])
                 self.assertEqual(data["initial"][3],
-                                 ["Engineering", "코딩", "active기능 구현", "2026-11-18 10:00",
+                                 ["Engineering", "코딩", "active", "2026-11-18 10:00",
                                   "2026-11-18 12:00", "구현 중", "리뷰 요청"])
                 self.assertEqual(data["initial"][4], [7, 7, 7, 7])
                 self.assertEqual(data["initial"][5:9], [True, True, False, False])
@@ -790,7 +783,7 @@ class DashboardUITests(unittest.TestCase):
                 self.assertEqual(data["afterDown"][2],
                                  ["col-stage", "col-bot", "col-title", "col-time", "col-time", "col-note", "col-next"])
                 self.assertEqual(data["afterDown"][3],
-                                 ["코딩", "Engineering", "active기능 구현", "2026-11-18 10:00",
+                                 ["코딩", "Engineering", "active", "2026-11-18 10:00",
                                   "2026-11-18 12:00", "구현 중", "리뷰 요청"])
                 self.assertEqual(data["afterDown"][4], [7, 7, 7, 7])
                 self.assertEqual(data["afterDown"][5:9], [False, "true", "봇 아래로 이동", "down"])
@@ -1607,6 +1600,8 @@ class DashboardUITests(unittest.TestCase):
             applySearch("ALPHA");
             observations.caseIds = ids();
             observations.caseMarks = [...document.querySelectorAll(".task-row mark")].map(node => node.textContent);
+            observations.caseHistoryMarks = [...document.querySelectorAll(".history mark")].map(node => node.textContent);
+            observations.caseRowTitleNodes = document.querySelectorAll(".task-row .task-title").length;
             applySearch("alpha beta");
             observations.andIds = ids();
             observations.andCounts = counts();
@@ -1643,7 +1638,9 @@ class DashboardUITests(unittest.TestCase):
         self.assertTrue(data["helpers"]["matchedTs"])
         self.assertEqual(data["initialIds"], ["and-task", "current-only", "old-task", "split-task"])
         self.assertEqual(data["caseIds"], ["and-task", "split-task"])
-        self.assertIn("Alpha", data["caseMarks"])
+        self.assertEqual(data["caseMarks"], [])
+        self.assertIn("Alpha", data["caseHistoryMarks"])
+        self.assertEqual(data["caseRowTitleNodes"], 0)
         self.assertEqual(data["andIds"], ["and-task"])
         self.assertEqual(data["andCounts"], [1, 1, 0, 0])
         self.assertEqual(data["andStatus"], '검색어 "alpha beta": 1개 작업, 1개 이벤트 일치')
@@ -1663,6 +1660,67 @@ class DashboardUITests(unittest.TestCase):
         self.assertTrue(data["clearedStatusHidden"])
         self.assertFalse(data["clearedHasHistory"])
 
+    def test_search_by_title_expands_to_matching_events_and_header_title(self):
+        extra = """
+        snapshot.tasks = [
+          {task_id: "work-1", bot: "Engineering", title: "Alpha Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00", note: "latest note", next: "latest next",
+           events: [
+             {task_id: "work-1", bot: "Engineering", title: "Alpha Event", stage: "코딩",
+              note: "alpha event note", next: "first next", ts: "2026-11-18T09:00:00+09:00"},
+             {task_id: "work-1", bot: "Engineering", title: "Beta Event", stage: "코딩",
+              note: "beta event note", next: "second next", ts: "2026-11-18T12:00:00+09:00"}
+           ]},
+          {task_id: "plain-task", bot: "Engineering", title: "Plain Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T10:00:00+09:00", note: "plain", next: "plain",
+           events: [{task_id: "plain-task", bot: "Engineering", title: "Plain Title", stage: "코딩",
+             note: "plain", next: "plain", ts: "2026-11-18T10:00:00+09:00"}]}
+        ];
+        """
+        data = self.observe_page("""
+            const searchEl = document.getElementById("search");
+            const applySearch = (query) => {
+              searchEl.value = query;
+              searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+              searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            };
+            const ids = () => [...document.querySelectorAll(".task-toggle")].map(node => node.dataset.taskId);
+            applySearch("Alpha");
+            observations.titleSearchIds = ids();
+            observations.rowTitleNodes = document.querySelectorAll(".task-row .task-title").length;
+            observations.rowCellText = document.querySelector(".task-row")?.cells[2].textContent;
+            observations.idTitleAttr = document.querySelector(".task-row .task-id")?.getAttribute("title");
+            const autoHist = document.querySelector(".history");
+            observations.autoHeading = autoHist ? autoHist.querySelector("h2").textContent : null;
+            observations.autoSummary = autoHist ? [
+              autoHist.querySelector(".summary-id")?.textContent,
+              autoHist.querySelector(".summary-title")?.textContent] : null;
+            observations.autoNotes = autoHist
+              ? [...autoHist.querySelector("table").tBodies[0].rows].map(tr => tr.cells[2].textContent) : [];
+            const toggle = [...document.querySelectorAll(".task-toggle")].find(node => node.dataset.taskId === "work-1");
+            toggle.click();
+            await tick();
+            const full = document.querySelector(".history");
+            observations.fullHeading = full ? full.querySelector("h2").textContent : null;
+            observations.fullSummary = full ? [
+              full.querySelector(".summary-id")?.textContent,
+              full.querySelector(".summary-title")?.textContent] : null;
+            observations.fullNotes = full
+              ? [...full.querySelector("table").tBodies[0].rows].map(tr => tr.cells[2].textContent) : [];
+            observations.fullHits = full
+              ? [...full.querySelector("table").tBodies[0].rows].map(tr => tr.classList.contains("hit")) : [];
+        """, 1280, extra_setup=extra)
+        self.assertEqual(data["titleSearchIds"], ["work-1"])
+        self.assertEqual(data["rowTitleNodes"], 0)
+        self.assertEqual(data["rowCellText"], "work-1")
+        self.assertEqual(data["idTitleAttr"], "Alpha Title")
+        self.assertEqual(data["autoHeading"], "일치한 이벤트 1개 (전체 2개)")
+        self.assertEqual(data["autoSummary"], ["work-1", "Alpha Title"])
+        self.assertEqual(data["autoNotes"], ["alpha event note"])
+        self.assertEqual(data["fullHeading"], "이벤트 이력")
+        self.assertEqual(data["fullSummary"], ["work-1", "Alpha Title"])
+        self.assertEqual(data["fullNotes"], ["alpha event note", "beta event note"])
+        self.assertEqual(data["fullHits"], [True, False])
 
     def test_search_highlight_safe_and_full_history(self):
         extra = """
@@ -1859,7 +1917,7 @@ class DashboardUITests(unittest.TestCase):
         self.assertEqual(data["colIds"], ["eng-done"])
         self.assertEqual(data["movedHeaders"][0], "작업")
         self.assertEqual(data["movedHeaders"][1], "봇")
-        self.assertEqual(data["movedRowCells"][0], "eng-doneEng Done")
+        self.assertEqual(data["movedRowCells"][0], "eng-done")
         self.assertEqual(data["movedRowCells"][1], "Engineering")
         self.assertEqual(data["movedHistSpan"], 5)
         self.assertEqual(data["movedIds"], ["eng-done"])
