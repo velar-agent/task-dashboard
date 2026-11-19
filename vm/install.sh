@@ -63,7 +63,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable ${service_name}.service
 sudo systemctl restart ${service_name}.service
 
-# nginx: 이 사이트 파일만 건드리고 다른 사이트는 절대 건드리지 않는다.
+# nginx: 이 사이트 파일(80->443 301 리다이렉트 전용)만 건드리고 다른 사이트는 절대 건드리지 않는다.
+# 443 TLS 블록은 Engineering이 관리하는 /etc/nginx/sites-available/task-dashboard-https에 별도로 둔다. 일반 HTTP는 앱으로 가지 않는다.
 sudo install -m 0644 "$nginx_src" /etc/nginx/sites-available/task-dashboard
 sudo ln -sf /etc/nginx/sites-available/task-dashboard /etc/nginx/sites-enabled/task-dashboard
 if ! sudo nginx -t; then

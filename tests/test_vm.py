@@ -632,25 +632,22 @@ class VmConfigTests(unittest.TestCase):
 
     def test_nginx_file(self):
         text = VM_NGINX.read_text(encoding="utf-8")
-        # 두 server 블록
+        # 두 server 블록, 둘 다 80->443 리다이렉트 전용
         self.assertEqual(text.count("server {"), 2)
         for needle in [
             "listen 80;",
             "listen [::]:80;",
             "server_name task-dashboard-dev.velar-agent.duckdns.org;",
             "server_name task-dashboard.velar-agent.duckdns.org;",
-            "client_max_body_size 1m;",
-            "proxy_pass http://127.0.0.1:8790;",
-            "proxy_pass http://127.0.0.1:8791;",
-            "proxy_http_version 1.1;",
-            "proxy_set_header Host $host;",
-            "proxy_set_header X-Forwarded-For $remote_addr;",
-            "proxy_set_header X-Forwarded-Proto http;",
-            "proxy_read_timeout 30s;",
+            "return 301 https://$host$request_uri;",
+            "/etc/nginx/sites-available/task-dashboard-https",
         ]:
             self.assertIn(needle, text)
-        # 두 location / 블록 모두에 있어야 한다
-        self.assertEqual(text.count("proxy_http_version 1.1;"), 2)
+        # 두 블록 모두에 있어야 한다
+        self.assertEqual(text.count("return 301 https://$host$request_uri;"), 2)
+        # 리다이렉트 전용: 앱으로 가는 프록시가 없어야 한다
+        for forbidden in ["proxy_pass", "8790", "8791", "X-Forwarded-Proto", "client_max_body_size"]:
+            self.assertNotIn(forbidden, text)
         self.assertNotIn("default_server", text)
         for forbidden in ["8787", "8788", "usage-dashboard"]:
             self.assertNotIn(forbidden, text)
