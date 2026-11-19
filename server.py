@@ -321,6 +321,16 @@ PAGE = """<!doctype html>
     .filter:hover { background: #f1f5f8; }
     .filter[aria-pressed="true"] { background: #e4eff7; color: #194f78; }
     .count { min-width: 1.4em; text-align: center; font: .78rem var(--mono); }
+    .view-toggle { display: inline-flex; gap: 0; border: 1px solid #cbd7df; border-radius: 7px; overflow: hidden; margin-left: auto; background: white; }
+    .view-toggle + .column-menu { margin-left: 0; }
+    .view-button { padding: 7px 12px; border: 0; background: white; font-weight: 600; white-space: nowrap; }
+    .view-button[aria-pressed="true"] { background: #e4eff7; color: #194f78; }
+    .view-button + .view-button { border-left: 1px solid #cbd7df; }
+    .scroll[hidden] { display: none; }
+    .status-sections[hidden] { display: none; }
+    .status-section { margin-top: 16px; }
+    .status-heading { margin: 0; padding: 14px 14px 0; font-size: 1rem; display: flex; align-items: center; gap: 8px; }
+    .status-heading .count { font-size: .85rem; }
     .visually-hidden {
       position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
       overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%);
@@ -477,6 +487,8 @@ PAGE = """<!doctype html>
       .filter { flex: 0 0 auto; min-height: 44px; scroll-snap-align: start; touch-action: manipulation; }
       .column-menu { width: 100%; margin-left: 0; }
       .columns-button { width: 100%; min-height: 44px; touch-action: manipulation; }
+      .view-toggle { width: 100%; margin-left: 0; }
+      .view-button { flex: 1 1 0; min-height: 44px; touch-action: manipulation; }
       .columns-panel {
         position: fixed; left: 0; right: 0; bottom: 0; top: auto;
         width: auto; min-width: 0; max-width: none;
@@ -577,7 +589,7 @@ PAGE = """<!doctype html>
       .history tbody td[data-label="단계"] { flex: 1 1 38%; min-width: 0; }
       .history tbody td[data-label="메모"],
       .history tbody td[data-label="다음 할 일"] { flex: 1 1 100%; min-width: 0; }
-      .refresh, .columns-button, .filter, .column-move, .reset-order {
+      .refresh, .columns-button, .view-button, .filter, .column-move, .reset-order {
         min-height: 44px; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
       }
       .bot-filter select { min-height: 44px; }
@@ -615,6 +627,10 @@ PAGE = """<!doctype html>
           <button class="filter" type="button" data-status="완료" aria-pressed="false">완료 <span class="count">—</span></button>
           <button class="filter" type="button" data-status="막힘" aria-pressed="false">막힘 <span class="count">—</span></button>
         </div>
+        <div class="view-toggle" role="group" aria-label="보기 방식">
+          <button type="button" id="view-list" class="view-button" data-view="list" aria-pressed="true">목록</button>
+          <button type="button" id="view-status" class="view-button" data-view="status" aria-pressed="false">상태별</button>
+        </div>
         <div class="column-menu">
           <button type="button" id="columns-button" class="columns-button" aria-haspopup="true" aria-expanded="false" aria-controls="columns-panel">열 ▾</button>
           <div id="columns-panel" class="columns-panel" role="group" aria-label="표시할 열" hidden></div>
@@ -635,6 +651,7 @@ PAGE = """<!doctype html>
           <tbody id="rows"><tr><td class="empty" colspan="7">작업을 불러오는 중입니다.</td></tr></tbody>
         </table>
       </div>
+      <div id="status-sections" class="status-sections" hidden></div>
     </section>
   </main>
   <script>
@@ -654,6 +671,11 @@ PAGE = """<!doctype html>
     const searchInput = document.getElementById("search");
     const searchClear = document.getElementById("search-clear");
     const searchStatus = document.getElementById("search-status");
+    const viewButtons = document.querySelectorAll(".view-button");
+    const viewListButton = document.getElementById("view-list");
+    const viewStatusButton = document.getElementById("view-status");
+    const statusSections = document.getElementById("status-sections");
+    const mainScroll = table.closest(".scroll");
     const COLUMNS = [
       {key: "bot", label: "봇", colClass: "col-bot", width: 10,
         cell: (task, expanded, keywords) => textCell(botName(task), keywords)},
@@ -689,12 +711,15 @@ PAGE = """<!doctype html>
     const columnsByKey = new Map(COLUMNS.map(column => [column.key, column]));
     const STORAGE_KEY = "task-dashboard.columns";
     const ORDER_STORAGE_KEY = "task-dashboard.column-order";
+    const VIEW_STORAGE_KEY = "task-dashboard.view";
     let tasks = [];
     let selected = "전체";
     let expandedId = null;
     let loaded = false;
     let searchQuery = "";
     let searchDebounce = null;
+    let viewMode = loadViewMode();
+    let loadFailedMessage = null;
 
     function defaultVisibleKeys() {
       return COLUMNS.map(column => column.key);
@@ -756,6 +781,42 @@ PAGE = """<!doctype html>
 
     let columnOrder = loadColumnOrder();
     let dragKey = null;
+
+    function loadViewMode() {
+      let raw;
+      try {
+        raw = localStorage.getItem(VIEW_STORAGE_KEY);
+      } catch {
+        return "list";
+      }
+      if (raw === "status") return "status";
+      if (raw === "list") return "list";
+      return "list";
+    }
+
+    function saveViewMode() {
+      try {
+        localStorage.setItem(VIEW_STORAGE_KEY, viewMode);
+      } catch {
+        // 사생활 모드 등 저장 실패는 무시하고 기본 동작을 유지한다.
+      }
+    }
+
+    function updateViewToggle() {
+      if (viewListButton) viewListButton.setAttribute("aria-pressed", String(viewMode === "list"));
+      if (viewStatusButton) viewStatusButton.setAttribute("aria-pressed", String(viewMode === "status"));
+      const isStatus = viewMode === "status";
+      if (mainScroll) mainScroll.hidden = isStatus;
+      if (statusSections) statusSections.hidden = !isStatus;
+    }
+
+    function setViewMode(mode) {
+      if (mode !== "list" && mode !== "status") return;
+      viewMode = mode;
+      saveViewMode();
+      updateViewToggle();
+      render();
+    }
 
     function saveColumnOrder() {
       try {
@@ -1063,6 +1124,31 @@ PAGE = """<!doctype html>
       return String(b.updated || "").localeCompare(String(a.updated || ""));
     }
 
+    function doneTimeOf(task) {
+      let best = null;
+      if (task && Array.isArray(task.events)) {
+        for (const event of task.events) {
+          if (!event || event.stage !== "완료") continue;
+          const time = typeof event.ts === "string" ? Date.parse(event.ts) : Number.NaN;
+          if (Number.isNaN(time)) continue;
+          if (best === null || time > best) best = time;
+        }
+      }
+      if (best !== null) return best;
+      const fallback = task && typeof task.updated === "string" ? task.updated : "";
+      const fallbackTime = fallback ? Date.parse(fallback) : Number.NaN;
+      return Number.isNaN(fallbackTime) ? 0 : fallbackTime;
+    }
+
+    function doneTaskCompare(a, b) {
+      const delta = doneTimeOf(b) - doneTimeOf(a);
+      if (delta !== 0) return delta;
+      const byId = String(a.task_id ?? "").localeCompare(
+        String(b.task_id ?? ""), "ko", {numeric: true, sensitivity: "base"});
+      if (byId !== 0) return byId;
+      return String(b.updated || "").localeCompare(String(a.updated || ""));
+    }
+
     function sortTasks(list, compare) {
       // 기본 비교기는 서버 기본 순서와 같다(상태 그룹, task_id 자연 정렬,
       // task_id 동률은 마지막 업데이트 내림차순).
@@ -1093,13 +1179,26 @@ PAGE = """<!doctype html>
       botFilter.value = byKey.has(previous) ? previous : "";
     }
 
-    function focusHeaderCell(key) {
-      const th = headRow.querySelector(`th[data-column="${key}"]`);
+    function focusHeaderCell(key, scope) {
+      if (!scope || scope === table) {
+        const th = table.querySelector(`th[data-column="${key}"]`);
+        if (th) th.focus({preventScroll: true});
+        return;
+      }
+      const section = typeof scope.closest === "function" ? scope.closest(".status-section") : null;
+      if (!section) {
+        const th = scope.querySelector(`th[data-column="${key}"]`);
+        if (th) th.focus({preventScroll: true});
+        return;
+      }
+      const status = section.getAttribute("data-status");
+      const fresh = statusSections ? statusSections.querySelector(`.status-section[data-status="${status}"]`) : null;
+      const th = fresh ? fresh.querySelector(`th[data-column="${key}"]`) : null;
       if (th) th.focus({preventScroll: true});
     }
 
     function clearDropTargets() {
-      headRow.querySelectorAll(".drop-target").forEach(node => node.classList.remove("drop-target"));
+      document.querySelectorAll(".drop-target").forEach(node => node.classList.remove("drop-target"));
     }
 
     function swapColumnOrder(firstKey, secondKey) {
@@ -1122,12 +1221,15 @@ PAGE = """<!doctype html>
       render();
     }
 
-    function applyColumnsToHeader() {
-      colgroup.replaceChildren();
-      headRow.replaceChildren();
+    function fillTableHeader(tableEl) {
+      const colgroupEl = tableEl.querySelector("colgroup");
+      const headRowEl = tableEl.querySelector("thead tr");
+      if (!colgroupEl || !headRowEl) return;
+      colgroupEl.replaceChildren();
+      headRowEl.replaceChildren();
       for (const column of visibleColumns()) {
         const col = element("col", column.colClass);
-        colgroup.append(col);
+        colgroupEl.append(col);
         const th = element("th", "", column.label);
         th.scope = "col";
         th.dataset.column = column.key;
@@ -1148,7 +1250,7 @@ PAGE = """<!doctype html>
           swapColumnOrder(column.key, neighbor.key);
           saveColumnOrder();
           refreshColumnLayout();
-          focusHeaderCell(column.key);
+          focusHeaderCell(column.key, tableEl);
         });
         th.addEventListener("dragstart", event => {
           dragKey = column.key;
@@ -1191,7 +1293,7 @@ PAGE = """<!doctype html>
           moveColumnTo(sourceKey, column.key);
           saveColumnOrder();
           refreshColumnLayout();
-          focusHeaderCell(sourceKey);
+          focusHeaderCell(sourceKey, tableEl);
         });
         // dragend는 드래그 소스 th에서만 발생하므로 헤더 행 전체의
         // .drop-target을 제거해 대상 th에 남지 않게 한다.
@@ -1200,13 +1302,19 @@ PAGE = """<!doctype html>
           clearDropTargets();
           dragKey = null;
         });
-        headRow.append(th);
+        headRowEl.append(th);
       }
       const total = visibleColumns().reduce((sum, column) => sum + (column.width || 0), 0);
       // 11.6은 기본 최소 너비 1160px를 열 폭 합 100으로 나눈 값이다.
-      table.style.minWidth = Math.max(320, Math.round(total * 11.6)) + "px";
-      for (const cell of rows.querySelectorAll("td.empty")) {
+      tableEl.style.minWidth = Math.max(320, Math.round(total * 11.6)) + "px";
+      for (const cell of tableEl.querySelectorAll("td.empty")) {
         cell.colSpan = visible.size;
+      }
+    }
+
+    function applyColumnsToHeader() {
+      for (const tableEl of document.querySelectorAll("table.tasks")) {
+        fillTableHeader(tableEl);
       }
     }
 
@@ -1349,7 +1457,157 @@ PAGE = """<!doctype html>
       render();
     }
 
+    function taskRowAndHistory(task, keywords, searchActive, historyId) {
+      const expanded = task.task_id === expandedId;
+      const titleHidden = !visible.has("title");
+      const row = element("tr", expanded ? "task-row expanded" : "task-row");
+      if (titleHidden) {
+        row.setAttribute("tabindex", "0");
+        row.setAttribute("aria-expanded", String(expanded));
+        row.setAttribute("aria-label", task.task_id + " 이력 보기");
+        row.dataset.taskId = task.task_id;
+        row.addEventListener("keydown", event => {
+          if (event.target !== row) return;
+          if (event.key === "Enter" || event.key === " " || event.key === "Spacebar" || event.key === "Space") {
+            if (event.key !== "Enter") event.preventDefault();
+            expandedId = expanded ? null : task.task_id;
+            render();
+          }
+        });
+      }
+      for (const column of visibleColumns()) {
+        const cell = column.cell(task, expanded, keywords);
+        cell.dataset.label = column.label;
+        cell.dataset.column = column.key;
+        row.append(cell);
+      }
+      const toggle = visible.has("title") ? row.querySelector(".task-toggle") : null;
+      row.addEventListener("click", () => {
+        expandedId = expanded ? null : task.task_id;
+        render();
+      });
+      let history = null;
+      if (expanded) {
+        if (toggle) toggle.setAttribute("aria-controls", historyId);
+        if (titleHidden) row.setAttribute("aria-controls", historyId);
+        if (searchActive) {
+          const matched = matchingEventsForTask(task, keywords);
+          history = historyRow(task, historyId, {
+            keywords: keywords,
+            hitSet: new Set(matched),
+          });
+        } else {
+          history = historyRow(task, historyId);
+        }
+      } else if (searchActive) {
+        const matched = matchingEventsForTask(task, keywords);
+        if (matched.length) {
+          if (toggle) toggle.setAttribute("aria-controls", historyId);
+          if (titleHidden) row.setAttribute("aria-controls", historyId);
+          const total = Array.isArray(task.events) ? task.events.length : 0;
+          history = historyRow(task, historyId, {
+            events: matched,
+            heading: `일치한 이벤트 ${matched.length}개 (전체 ${total}개)`,
+            keywords: keywords,
+            hitSet: new Set(matched),
+          });
+        }
+      }
+      return {row, history, toggle};
+    }
+
+    function orderedTasksForStatus(taskList) {
+      const groups = {"진행 중": [], "막힘": [], "완료": []};
+      for (const task of taskList) {
+        const status = taskStatus(task);
+        if (groups[status]) groups[status].push(task);
+        else groups["진행 중"].push(task);
+      }
+      groups["진행 중"].sort(defaultTaskCompare);
+      groups["막힘"].sort(defaultTaskCompare);
+      groups["완료"].sort(doneTaskCompare);
+      return groups;
+    }
+
+    function createStatusTable(statusLabel) {
+      const wrapper = element("div", "scroll");
+      wrapper.tabIndex = 0;
+      wrapper.setAttribute("role", "region");
+      wrapper.setAttribute("aria-label", statusLabel + " 작업 표");
+      const sectionTable = element("table", "tasks");
+      sectionTable.setAttribute("aria-label", statusLabel + " 작업 현황");
+      const colgroupEl = document.createElement("colgroup");
+      const theadEl = document.createElement("thead");
+      theadEl.append(document.createElement("tr"));
+      const tbodyEl = document.createElement("tbody");
+      sectionTable.append(colgroupEl, theadEl, tbodyEl);
+      wrapper.append(sectionTable);
+      fillTableHeader(sectionTable);
+      return {wrapper, tableEl: sectionTable, tbodyEl};
+    }
+
+    function renderListMode(matching, keywords, searchActive) {
+      const fragment = document.createDocumentFragment();
+      const focusedId = document.activeElement?.dataset.taskId;
+      const titleHidden = !visible.has("title");
+      let restoreFocus;
+      for (const [index, task] of matching.entries()) {
+        const {row, history, toggle} = taskRowAndHistory(task, keywords, searchActive, "history-" + index);
+        fragment.append(row);
+        if (history) fragment.append(history);
+        if (task.task_id === focusedId) restoreFocus = titleHidden ? row : toggle;
+      }
+      if (!matching.length) {
+        fragment.append(emptyRow(searchActive ? "일치하는 이벤트가 없습니다." : (selected === "전체" ? "등록된 작업이 없습니다." : "이 상태의 작업이 없습니다.")));
+      }
+      if (statusSections) statusSections.replaceChildren();
+      rows.replaceChildren(fragment);
+      if (restoreFocus) restoreFocus.focus({preventScroll: true});
+    }
+
+    function renderStatusMode(matching, keywords, searchActive) {
+      const focusedId = document.activeElement?.dataset.taskId;
+      const titleHidden = !visible.has("title");
+      let restoreFocus;
+      const groups = orderedTasksForStatus(matching);
+      const labels = ["진행 중", "막힘", "완료"];
+      const allowed = selected === "전체" ? labels : [selected];
+      statusSections.replaceChildren();
+      rows.replaceChildren();
+      let historySeq = 0;
+      for (const label of labels) {
+        if (!allowed.includes(label)) continue;
+        const list = groups[label] || [];
+        if (!list.length) continue;
+        const section = element("section", "status-section");
+        section.setAttribute("data-status", label);
+        const heading = element("h2", "status-heading");
+        heading.append(document.createTextNode(label + " "));
+        const countSpan = element("span", "count");
+        countSpan.textContent = String(list.length);
+        heading.append(countSpan);
+        const built = createStatusTable(label);
+        const localFragment = document.createDocumentFragment();
+        for (const task of list) {
+          const historyId = "history-" + historySeq;
+          historySeq += 1;
+          const {row, history, toggle} = taskRowAndHistory(task, keywords, searchActive, historyId);
+          localFragment.append(row);
+          if (history) localFragment.append(history);
+          if (task.task_id === focusedId) restoreFocus = titleHidden ? row : toggle;
+        }
+        built.tbodyEl.replaceChildren(localFragment);
+        section.append(heading, built.wrapper);
+        statusSections.append(section);
+      }
+      if (!statusSections.childElementCount) {
+        statusSections.append(element("p", "empty", searchActive ? "일치하는 이벤트가 없습니다." : (selected === "전체" ? "등록된 작업이 없습니다." : "이 상태의 작업이 없습니다.")));
+      }
+      if (restoreFocus) restoreFocus.focus({preventScroll: true});
+    }
+
     function render() {
+      updateViewToggle();
       const keywords = searchKeywordsFor(searchQuery);
       const searchActive = keywords.length > 0;
       const botTasks = botFilter.value ? tasks.filter(task => botKey(task) === botFilter.value) : tasks;
@@ -1367,6 +1625,15 @@ PAGE = """<!doctype html>
           searchStatus.hidden = true;
           searchStatus.textContent = "";
         }
+        if (viewMode === "status") {
+          const loadingMessage = loadFailedMessage || "작업을 불러오는 중입니다.";
+          const current = statusSections.querySelector(".empty");
+          if (!current || current.textContent !== loadingMessage) {
+            statusSections.replaceChildren(element("p", "empty", loadingMessage));
+          }
+        } else if (statusSections && statusSections.childElementCount) {
+          statusSections.replaceChildren();
+        }
         return;
       }
       const matching = sortTasks(searchFiltered.filter(task => selected === "전체" || task.status === selected));
@@ -1381,74 +1648,11 @@ PAGE = """<!doctype html>
           searchStatus.hidden = true;
         }
       }
-      const fragment = document.createDocumentFragment();
-      const focusedId = document.activeElement?.dataset.taskId;
-      const titleHidden = !visible.has("title");
-      let restoreFocus;
-      for (const [index, task] of matching.entries()) {
-        const expanded = task.task_id === expandedId;
-        const row = element("tr", expanded ? "task-row expanded" : "task-row");
-        if (titleHidden) {
-          row.setAttribute("tabindex", "0");
-          row.setAttribute("aria-expanded", String(expanded));
-          row.setAttribute("aria-label", task.task_id + " 이력 보기");
-          row.dataset.taskId = task.task_id;
-          row.addEventListener("keydown", event => {
-            if (event.target !== row) return;
-            if (event.key === "Enter" || event.key === " " || event.key === "Spacebar" || event.key === "Space") {
-              if (event.key !== "Enter") event.preventDefault();
-              expandedId = expanded ? null : task.task_id;
-              render();
-            }
-          });
-        }
-        for (const column of visibleColumns()) {
-          const cell = column.cell(task, expanded, keywords);
-          cell.dataset.label = column.label;
-          cell.dataset.column = column.key;
-          row.append(cell);
-        }
-        const toggle = visible.has("title") ? row.querySelector(".task-toggle") : null;
-        row.addEventListener("click", () => {
-          expandedId = expanded ? null : task.task_id;
-          render();
-        });
-        fragment.append(row);
-        if (expanded) {
-          const id = "history-" + index;
-          if (toggle) toggle.setAttribute("aria-controls", id);
-          if (titleHidden) row.setAttribute("aria-controls", id);
-          if (searchActive) {
-            const matched = matchingEventsForTask(task, keywords);
-            fragment.append(historyRow(task, id, {
-              keywords: keywords,
-              hitSet: new Set(matched),
-            }));
-          } else {
-            fragment.append(historyRow(task, id));
-          }
-        } else if (searchActive) {
-          const matched = matchingEventsForTask(task, keywords);
-          if (matched.length) {
-            const id = "history-" + index;
-            if (toggle) toggle.setAttribute("aria-controls", id);
-            if (titleHidden) row.setAttribute("aria-controls", id);
-            const total = Array.isArray(task.events) ? task.events.length : 0;
-            fragment.append(historyRow(task, id, {
-              events: matched,
-              heading: `일치한 이벤트 ${matched.length}개 (전체 ${total}개)`,
-              keywords: keywords,
-              hitSet: new Set(matched),
-            }));
-          }
-        }
-        if (task.task_id === focusedId) restoreFocus = titleHidden ? row : toggle;
+      if (viewMode === "status") {
+        renderStatusMode(matching, keywords, searchActive);
+      } else {
+        renderListMode(matching, keywords, searchActive);
       }
-      if (!matching.length) {
-        fragment.append(emptyRow(searchActive ? "일치하는 이벤트가 없습니다." : (selected === "전체" ? "등록된 작업이 없습니다." : "이 상태의 작업이 없습니다.")));
-      }
-      rows.replaceChildren(fragment);
-      if (restoreFocus) restoreFocus.focus({preventScroll: true});
     }
 
     for (const button of filters) {
@@ -1503,12 +1707,19 @@ PAGE = """<!doctype html>
         tasks = data.tasks;
         updateBotOptions();
         loaded = true;
+        loadFailedMessage = null;
         render();
         setTime(updated, data.generated_at);
         notice.hidden = true;
       } catch {
         notice.hidden = false;
-        if (!loaded) rows.replaceChildren(emptyRow("작업 목록을 불러올 수 없습니다."));
+        if (!loaded) {
+          loadFailedMessage = "작업 목록을 불러올 수 없습니다.";
+          rows.replaceChildren(emptyRow(loadFailedMessage));
+          if (viewMode === "status") {
+            statusSections.replaceChildren(element("p", "empty", loadFailedMessage));
+          }
+        }
       } finally {
         refreshButton.disabled = false;
       }
@@ -1556,6 +1767,13 @@ PAGE = """<!doctype html>
       }
     });
 
+    for (const button of viewButtons) {
+      button.addEventListener("click", () => {
+        setViewMode(button.dataset.view);
+      });
+    }
+    updateViewToggle();
+
     buildColumnPanel();
     applyColumnsToHeader();
 
@@ -1564,6 +1782,7 @@ PAGE = """<!doctype html>
     updateSearchClearVisibility();
 
     refreshButton.addEventListener("click", refresh);
+    render();
     refresh();
     window.setInterval(refresh, 30000);
   </script>
