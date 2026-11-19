@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from operator import itemgetter
@@ -14,6 +15,49 @@ DEFAULT_TASKS_FILE = "/workspace/task-status/tasks.jsonl"
 KST = timezone(timedelta(hours=9), "KST")
 STAGES = ("접수", "계획", "코딩", "리뷰", "커밋", "배포", "점검", "완료", "막힘")
 LOGGER = logging.getLogger(__name__)
+
+# 기본 표시 순서: 상태 그룹(진행 중 → 막힘 → 완료), 그룹 안은 task_id
+# 자연 정렬, task_id 동률은 마지막 업데이트 내림차순이다.
+_STATUS_ORDER = {"진행 중": 0, "막힘": 1, "완료": 2}
+_DIGIT_CHUNK_RE = re.compile(r"(\d+)")
+
+
+def _task_status(task):
+    """작업의 표시 상태를 반환한다.
+
+    ``task.get("status")``가 비어 있지 않은 문자열이면 그 값을 쓰고,
+    없으면 ``stage``에서 유도한다(완료→완료, 막힘→막힘, 그 외 진행 중).
+    접수부터 점검까지의 단계는 모두 진행 중이다.
+    """
+    status = task.get("status") if isinstance(task, dict) else None
+    if isinstance(status, str) and status:
+        return status
+    stage = task.get("stage") if isinstance(task, dict) else None
+    if stage == "완료":
+        return "완료"
+    if stage == "막힘":
+        return "막힘"
+    return "진행 중"
+
+
+def _natural_task_id_key(task_id):
+    """task_id용 자연 정렬 키를 만든다.
+
+    클라이언트 ``localeCompare(..., "ko", {numeric: true, sensitivity: "base"})``를
+    Python 표준 라이브러리로 근사한다: 숫자/비숫자 청크로 나누어 숫자 청크는
+    int로, 비숫자 청크는 소문자로 비교한다. JS 로케일 비교와 마찬가지로
+    같은 위치에서는 숫자 청크가 비숫자 청크보다 앞에 온다. 한국어 로케일
+    순서나 악센트 무시 같은 세부 규칙은 완전히 일치하지 않을 수 있다.
+    """
+    key = []
+    for chunk in _DIGIT_CHUNK_RE.split(str(task_id)):
+        if not chunk:
+            continue
+        if chunk.isdigit():
+            key.append((0, int(chunk)))
+        else:
+            key.append((1, chunk.lower()))
+    return key
 
 
 def read_event(line):
@@ -37,9 +81,12 @@ def read_event(line):
 
 
 def load_tasks(path):
-    """유효한 이벤트를 시각순으로 접고 최근 업데이트된 작업부터 반환한다.
+    """유효한 이벤트를 시각순으로 접고 상태 그룹→task_id 자연 정렬→updated 내림차순으로 반환한다.
 
-    완료 작업은 업데이트가 가장 최근이어도 항상 뒤에 둔다. 막힘은 앞 그룹에 남는다.
+    상태 그룹 순서는 진행 중, 막힘, 완료이며 완료는 항상 마지막이다. 같은
+    상태 그룹 안에서는 task_id를 자연 정렬(숫자는 수치 비교, 대소문자 무시)로
+    오름차순 정렬하고, task_id 비교가 동률이면 마지막 업데이트를 내림차순으로
+    정렬한다. Python 자연 정렬 키는 클라이언트의 JS 로케일 비교를 근사한다.
     """
     groups = {}
     skipped = 0
@@ -87,9 +134,12 @@ def load_tasks(path):
             "next": latest["next"],
             "events": events,
         })
+    # updated 내림차순을 먼저 정렬한 뒤 상태/task_id로 안정 정렬한다. task_id
+    # 비교가 동률인 작업은 updated 내림차순 순서를 유지한다.
     tasks.sort(key=itemgetter("updated"), reverse=True)
-    # 완료는 항상 뒤로(그룹 안에서는 업데이트 내림차순 유지). 막힘은 앞 그룹에 남는다.
-    return [task for task in tasks if task["stage"] != "완료"] + [task for task in tasks if task["stage"] == "완료"]
+    tasks.sort(key=lambda task: (_STATUS_ORDER.get(_task_status(task), 0),
+                                 _natural_task_id_key(task["task_id"])))
+    return tasks
 
 
 PAGE = """<!doctype html>
@@ -806,16 +856,45 @@ PAGE = """<!doctype html>
       return name || "(미지정)";
     }
 
+    const STATUS_RANK = {"진행 중": 0, "막힘": 1, "완료": 2};
+
+    function taskStatus(task) {
+      // status가 있으면 그 값을 쓰고, 없으면 stage에서 유도한다.
+      // 접수부터 점검까지의 단계는 모두 진행 중이다.
+      if (task && typeof task.status === "string" && task.status) return task.status;
+      if (task && task.stage === "완료") return "완료";
+      if (task && task.stage === "막힘") return "막힘";
+      return "진행 중";
+    }
+
+    function taskStatusRank(task) {
+      return STATUS_RANK[taskStatus(task)] ?? 0;
+    }
+
     function isCompletedTask(task) {
-      return task.stage === "완료" || task.status === "완료";
+      return taskStatus(task) === "완료";
+    }
+
+    function defaultTaskCompare(a, b) {
+      const group = taskStatusRank(a) - taskStatusRank(b);
+      if (group !== 0) return group;
+      const byId = String(a.task_id ?? "").localeCompare(
+        String(b.task_id ?? ""), "ko", {numeric: true, sensitivity: "base"});
+      if (byId !== 0) return byId;
+      return String(b.updated || "").localeCompare(String(a.updated || ""));
     }
 
     function sortTasks(list, compare) {
-      // 기본 비교기는 서버 순서와 같다(마지막 업데이트 내림차순).
-      // 완료 파티션은 항상 마지막에 적용하므로 어떤 열 정렬이 와도 완료는 뒤에 남는다.
-      const comparator = compare || ((a, b) => String(b.updated || "").localeCompare(String(a.updated || "")));
-      const ordered = [...list].sort(comparator);
-      return [...ordered.filter(task => !isCompletedTask(task)), ...ordered.filter(isCompletedTask)];
+      // 기본 비교기는 서버 기본 순서와 같다(상태 그룹, task_id 자연 정렬,
+      // task_id 동률은 마지막 업데이트 내림차순).
+      // 커스텀 비교기가 와도 상태 그룹 파티션(진행 중, 막힘, 완료)은 항상
+      // 마지막에 안정 파티션으로 적용하므로 완료는 뒤에 남는다.
+      const ordered = compare ? [...list].sort(compare) : [...list].sort(defaultTaskCompare);
+      return [
+        ...ordered.filter(task => taskStatusRank(task) === 0),
+        ...ordered.filter(task => taskStatusRank(task) === 1),
+        ...ordered.filter(task => taskStatusRank(task) === 2),
+      ];
     }
 
     function updateBotOptions() {

@@ -67,13 +67,22 @@ class DashboardTests(unittest.TestCase):
         self.write_events(*records)
         tasks = server.load_tasks(self.path)
         self.assertEqual(len(tasks), len(stages))
-        self.assertEqual([task["task_id"] for task in tasks[:2]], ["코딩", "계획"])
-        self.assertEqual(tasks[0]["updated"], "2026-11-18T16:30:00.100000+09:00")
+        # 기본 순서는 상태 그룹(진행 중 → 막힘 → 완료)이며, 그룹 안은
+        # task_id 자연 정렬이다. 마지막 업데이트는 기본 순서가 아니다.
+        ranks = {"진행 중": 0, "막힘": 1, "완료": 2}
+        self.assertEqual([ranks[task["status"]] for task in tasks],
+                         sorted(ranks[task["status"]] for task in tasks))
+        self.assertEqual([task["task_id"] for task in tasks[-2:]], ["막힘", "완료"])
+        progress_ids = [task["task_id"] for task in tasks if task["status"] == "진행 중"]
+        self.assertEqual(progress_ids, sorted(progress_ids, key=server._natural_task_id_key))
+        by_id = {task["task_id"]: task for task in tasks}
+        self.assertEqual(by_id["코딩"]["updated"], "2026-11-18T16:30:00.100000+09:00")
         statuses = {task["task_id"]: task["status"] for task in tasks}
         self.assertEqual(statuses, {s: s if s in ("완료", "막힘") else "진행 중" for s in stages})
 
-    def test_completed_always_last_with_updated_desc_within_groups(self):
-        # 완료는 업데이트가 가장 최근이어도 항상 뒤. 막힘은 앞 그룹에 남는다.
+    def test_completed_always_last_with_task_id_order_within_groups(self):
+        # 완료는 업데이트가 가장 최근이어도 항상 뒤. 막힘은 완료 앞이다.
+        # 같은 상태 그룹 안에서는 task_id 자연 정렬이다(업데이트 순이 아니다).
         self.write_events(
             event("done-old", "2026-11-18T08:00:00+09:00", "완료"),
             event("active-old", "2026-11-18T09:00:00+09:00", "코딩"),
@@ -84,18 +93,80 @@ class DashboardTests(unittest.TestCase):
         tasks = server.load_tasks(self.path)
         self.assertEqual(
             [task["task_id"] for task in tasks],
-            ["active-new", "blocked", "active-old", "done-new", "done-old"],
+            ["active-new", "active-old", "blocked", "done-new", "done-old"],
         )
         self.assertEqual(
             [(task["task_id"], task["stage"], task["status"]) for task in tasks],
             [
                 ("active-new", "리뷰", "진행 중"),
-                ("blocked", "막힘", "막힘"),
                 ("active-old", "코딩", "진행 중"),
+                ("blocked", "막힘", "막힘"),
                 ("done-new", "완료", "완료"),
                 ("done-old", "완료", "완료"),
             ],
         )
+
+    def test_status_groups_natural_id_order_regardless_of_updated(self):
+        # 상태 그룹(진행 중 → 막힘 → 완료) 안에서는 task_id 자연 정렬이
+        # 업데이트보다 우선한다. task-2가 task-10보다 앞에 오고,
+        # 대소문자는 구분하지 않는다. 숫자 시작 ID는 JS 로케일 비교처럼
+        # 문자 시작 ID보다 앞에 온다.
+        self.write_events(
+            event("task-10", "2026-11-18T08:00:00+09:00", "코딩"),
+            event("task-2", "2026-11-18T15:00:00+09:00", "코딩"),
+            event("Task-1", "2026-11-18T12:00:00+09:00", "코딩"),
+            event("a", "2026-11-18T16:00:00+09:00", "코딩"),
+            event("B", "2026-11-18T07:00:00+09:00", "코딩"),
+            event("10", "2026-11-18T16:00:00+09:00", "코딩"),
+            event("1", "2026-11-18T07:00:00+09:00", "코딩"),
+            event("blocked-z", "2026-11-18T16:30:00+09:00", "막힘"),
+            event("blocked-a", "2026-11-18T07:30:00+09:00", "막힘"),
+            event("done-10", "2026-11-18T16:29:00+09:00", "완료"),
+            event("done-2", "2026-11-18T16:28:00+09:00", "완료"),
+        )
+        tasks = server.load_tasks(self.path)
+        self.assertEqual(
+            [task["task_id"] for task in tasks],
+            ["1", "10", "a", "B", "Task-1", "task-2", "task-10",
+             "blocked-a", "blocked-z", "done-2", "done-10"],
+        )
+        self.assertEqual(
+            [task["status"] for task in tasks],
+            ["진행 중"] * 7 + ["막힘"] * 2 + ["완료"] * 2,
+        )
+
+    def test_task_status_derives_from_stage_when_status_missing(self):
+        # status가 없거나 비어 있으면 stage에서 유도하고, 있으면 status가
+        # stage보다 우선한다. 접수부터 점검까지는 모두 진행 중이다.
+        for stage in ("접수", "계획", "코딩", "리뷰", "커밋", "배포", "점검"):
+            self.assertEqual(server._task_status({"stage": stage}), "진행 중")
+        self.assertEqual(server._task_status({"stage": "완료"}), "완료")
+        self.assertEqual(server._task_status({"stage": "막힘"}), "막힘")
+        self.assertEqual(server._task_status({}), "진행 중")
+        self.assertEqual(server._task_status({"status": "", "stage": "완료"}), "완료")
+        self.assertEqual(server._task_status({"status": "막힘", "stage": "완료"}), "막힘")
+        self.assertEqual(server._task_status({"status": "진행 중", "stage": "완료"}), "진행 중")
+
+    def test_natural_key_matches_js_locale_order_for_common_ids(self):
+        # Python 근사 키가 JS localeCompare(numeric, base) 순서와 같은
+        # 대표 ID 집합에 대해 같은 순서를 내는지 본다.
+        ids = ["task-2", "task-10", "Task-1", "a", "A", "B", "a2", "a10", "1", "10", "2", ""]
+        self.assertEqual(
+            sorted(ids, key=server._natural_task_id_key),
+            ["", "1", "2", "10", "a", "A", "a2", "a10", "B", "Task-1", "task-2", "task-10"],
+        )
+
+    def test_task_id_compare_tiebreak_by_updated_desc(self):
+        # "Task-1"과 "task-1"은 기본 비교(base)에서 동률이다. 같은 상태
+        # 그룹이면 마지막 업데이트가 최근인 작업이 먼저 온다. load_tasks는
+        # task_id로 묶으므로 서로 다른 대소문자 ID로만 관찰할 수 있다.
+        self.write_events(
+            event("Task-1", EARLY, "코딩"),
+            event("task-1", LATE, "코딩"),
+            event("a-task", "2026-11-18T12:00:00+09:00", "코딩"),
+        )
+        tasks = server.load_tasks(self.path)
+        self.assertEqual([task["task_id"] for task in tasks], ["a-task", "task-1", "Task-1"])
 
     def test_intake_then_plan_folds_into_one_in_progress_task(self):
         self.write_events(

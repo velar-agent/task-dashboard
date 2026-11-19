@@ -297,7 +297,7 @@ class DashboardUITests(unittest.TestCase):
         self.assertEqual(data["options"][0], "전체")
         self.assertCountEqual(data["options"][1:], ["(미지정)", "<b>QA</b>", "Engineering"])
         self.assertEqual(data["markupNodes"], 0)
-        self.assertEqual(data["all"], ["", [4, 1, 2, 1], ["active", "blocked", "unnamed", "done"]])
+        self.assertEqual(data["all"], ["", [4, 1, 2, 1], ["active", "blocked", "done", "unnamed"]])
         self.assertEqual(data["qa"], ["<b>QA</b>", [1, 0, 0, 1], ["blocked"]])
         self.assertEqual(data["backToAll"], data["all"])
         self.assertEqual(data["engineering"], ["Engineering", [2, 1, 1, 0], ["active", "done"]])
@@ -589,8 +589,8 @@ class DashboardUITests(unittest.TestCase):
         self.assertEqual(data["rowsHidden"], [
             ["0", 0, "false", "active 이력 보기"],
             ["0", 0, "false", "blocked 이력 보기"],
-            ["0", 0, "false", "unnamed 이력 보기"],
             ["0", 0, "false", "done 이력 보기"],
+            ["0", 0, "false", "unnamed 이력 보기"],
         ])
         self.assertEqual(data["focusedAfterTab"], [True, "TR", "active"])
         self.assertEqual(data["openedByEnter"], [False, True, 6, "TR", "active", "true"])
@@ -1314,23 +1314,155 @@ class DashboardUITests(unittest.TestCase):
             observations.statusLast = sortTasks([statusDone, active]).map(task => task.task_id);
             observations.stageLast = sortTasks([stageDone, active]).map(task => task.task_id);
         """
-        expected_desc = ["active-new", "blocked", "active-old", "done-new", "done-old"]
-        expected_asc = ["active-old", "blocked", "active-new", "done-old", "done-new"]
+        # 기본 순서: 진행 중(task_id) → 막힘 → 완료(task_id).
+        # 커스텀 비교기 뒤에서도 상태 그룹 파티션이 적용된다.
+        expected_default = ["active-new", "active-old", "blocked", "done-new", "done-old"]
+        expected_asc = ["active-old", "active-new", "blocked", "done-old", "done-new"]
         for width in (1280, 390):
             with self.subTest(width=width):
                 data = self.observe_page(exercise, width)
                 self.assertEqual(data["hasHelper"], [True, True])
-                self.assertEqual(data["domOrder"], expected_desc)
-                self.assertEqual(data["defaultOrder"], expected_desc)
+                self.assertEqual(data["domOrder"], expected_default)
+                self.assertEqual(data["defaultOrder"], expected_default)
                 self.assertEqual(data["ascending"], expected_asc)
-                self.assertEqual(data["descending"], expected_desc)
-                self.assertEqual(data["reversedInput"], expected_desc)
+                self.assertEqual(data["descending"], expected_default)
+                self.assertEqual(data["reversedInput"], expected_default)
                 self.assertEqual(
                     data["inputKept"],
                     ["done-new", "active-old", "done-old", "active-new", "blocked"],
                 )
                 self.assertEqual(data["statusLast"], ["only-active", "status-done"])
                 self.assertEqual(data["stageLast"], ["only-active", "stage-done"])
+
+    def test_default_order_dom_at_both_widths(self):
+        # 렌더된 DOM 순서도 상태 그룹(진행 중 → 막힘 → 완료)과
+        # 그룹 안 task_id 자연 정렬을 따른다. 업데이트 순이 아니다.
+        exercise = """
+            const t = (id, stage, updated) => ({task_id: id, bot: "Engineering", title: id, stage,
+              status: stage === "완료" ? "완료" : stage === "막힘" ? "막힘" : "진행 중",
+              started: stamp, updated, events: []});
+            snapshot.tasks = [
+              t("task-10", "코딩", "2026-11-18T08:00:00+09:00"),
+              t("blocked-z", "막힘", "2026-11-18T16:30:00+09:00"),
+              t("a", "코딩", "2026-11-18T16:00:00+09:00"),
+              t("done-2", "완료", "2026-11-18T16:28:00+09:00"),
+              t("task-2", "코딩", "2026-11-18T15:00:00+09:00"),
+              t("blocked-a", "막힘", "2026-11-18T07:30:00+09:00"),
+              t("B", "코딩", "2026-11-18T07:00:00+09:00"),
+              t("Task-1", "코딩", "2026-11-18T12:00:00+09:00"),
+              t("done-10", "완료", "2026-11-18T16:29:00+09:00"),
+            ];
+            await tick();
+            observations.domOrder = [...document.querySelectorAll(".task-toggle")]
+              .map(node => node.dataset.taskId);
+        """
+        expected = ["a", "B", "Task-1", "task-2", "task-10", "blocked-a", "blocked-z", "done-2", "done-10"]
+        for width in (1280, 390):
+            with self.subTest(width=width):
+                data = self.observe_page(exercise, width)
+                self.assertEqual(data["domOrder"], expected)
+
+    def test_sort_tasks_status_derives_from_stage_when_missing(self):
+        # status가 없으면 stage에서 유도한다(접수..점검은 진행 중).
+        # status가 있으면 stage보다 우선한다.
+        exercise = """
+            const t = (id, stage, status) => ({task_id: id, bot: "Engineering", title: id,
+              stage, ...(status === undefined ? {} : {status}),
+              started: stamp, updated: stamp, events: []});
+            observations.derived = sortTasks([
+              t("z-done", "완료"), t("a-blocked", "막힘"), t("m-active", "코딩"),
+              t("b-intake", "접수"), t("c-status-blocked", "코딩", "막힘"),
+              t("d-status-done", "코딩", "완료"),
+            ]).map(task => task.task_id);
+        """
+        data = self.observe_page(exercise, 1280)
+        # 진행 중(b-intake, m-active) → 막힘(a-blocked, c-status-blocked) → 완료(d-status-done, z-done)
+        self.assertEqual(data["derived"],
+                         ["b-intake", "m-active", "a-blocked", "c-status-blocked", "d-status-done", "z-done"])
+
+    def test_sort_tasks_natural_numeric_compare(self):
+        # task_id 숫자는 수치로 비교한다(task-2가 task-10보다 앞).
+        exercise = """
+            const t = (id, status) => ({task_id: id, bot: "Engineering", title: id,
+              stage: status === "완료" ? "완료" : status === "막힘" ? "막힘" : "코딩",
+              status, started: stamp, updated: stamp, events: []});
+            const ids = ["task-2", "task-10", "Task-1", "a", "B"];
+            // 업데이트를 역순으로 주어 업데이트가 앞세우지 못하게 한다.
+            const tasks = ids.map((id, i) => ({...t(id, "진행 중"),
+              updated: "2026-11-18T" + String(12 - i).padStart(2, "0") + ":00:00+09:00"}));
+            observations.natural = sortTasks(tasks).map(task => task.task_id);
+            observations.numericPair = sortTasks([t("task-10", "진행 중"), t("task-2", "진행 중")])
+              .map(task => task.task_id);
+            observations.grouped = sortTasks([
+              t("task-10", "완료"), t("task-2", "진행 중"), t("a", "막힘"), t("B", "진행 중"),
+            ]).map(task => task.task_id);
+        """
+        data = self.observe_page(exercise, 1280)
+        self.assertEqual(data["natural"], ["a", "B", "Task-1", "task-2", "task-10"])
+        self.assertEqual(data["numericPair"], ["task-2", "task-10"])
+        # 진행 중(B, task-2) → 막힘(a) → 완료(task-10)
+        self.assertEqual(data["grouped"], ["B", "task-2", "a", "task-10"])
+
+    def test_sort_tasks_tiebreak_updated_desc_for_equal_ids(self):
+        # task_id 비교가 동률이면 마지막 업데이트 내림차순이다.
+        # load_tasks는 ID로 묶으므로 중복 ID는 직접 sortTasks 호출로만 관찰한다.
+        exercise = """
+            const t = (id, updated) => ({task_id: id, bot: "Engineering", title: id, stage: "코딩",
+              status: "진행 중", started: stamp, updated, events: []});
+            const dup = [
+              t("dup", "2026-11-18T08:00:00+09:00"),
+              t("dup", "2026-11-18T16:00:00+09:00"),
+              t("dup", "2026-11-18T12:00:00+09:00"),
+            ];
+            observations.dupOrder = sortTasks(dup).map(task => task.updated);
+            const cased = [
+              t("Task-1", "2026-11-18T08:00:00+09:00"),
+              t("task-1", "2026-11-18T16:00:00+09:00"),
+            ];
+            observations.casedOrder = sortTasks(cased).map(task => task.task_id);
+        """
+        data = self.observe_page(exercise, 1280)
+        self.assertEqual(data["dupOrder"], [
+            "2026-11-18T16:00:00+09:00",
+            "2026-11-18T12:00:00+09:00",
+            "2026-11-18T08:00:00+09:00",
+        ])
+        self.assertEqual(data["casedOrder"], ["task-1", "Task-1"])
+
+    def test_sort_tasks_custom_comparator_still_partitions(self):
+        # 커스텀 비교기 뒤에도 상태 파티션(진행 중, 막힘, 완료)이 적용된다.
+        exercise = """
+            const t = (id, stage, updated) => ({task_id: id, bot: "Engineering", title: id, stage,
+              status: stage === "완료" ? "완료" : stage === "막힘" ? "막힘" : "진행 중",
+              started: stamp, updated, events: []});
+            const mixed = [
+              t("done-new", "완료", "2026-11-18T16:30:00+09:00"),
+              t("active-old", "코딩", "2026-11-18T09:00:00+09:00"),
+              t("done-old", "완료", "2026-11-18T08:00:00+09:00"),
+              t("active-new", "코딩", "2026-11-18T15:00:00+09:00"),
+              t("blocked", "막힘", "2026-11-18T14:00:00+09:00"),
+            ];
+            observations.byUpdatedDesc = sortTasks(mixed,
+              (a, b) => String(b.updated).localeCompare(String(a.updated))).map(task => task.task_id);
+            observations.byUpdatedAsc = sortTasks(mixed,
+              (a, b) => String(a.updated).localeCompare(String(b.updated))).map(task => task.task_id);
+            observations.byIdDesc = sortTasks(mixed,
+              (a, b) => String(b.task_id).localeCompare(String(a.task_id))).map(task => task.task_id);
+        """
+        data = self.observe_page(exercise, 1280)
+        self.assertEqual(data["byUpdatedDesc"],
+                         ["active-new", "active-old", "blocked", "done-new", "done-old"])
+        self.assertEqual(data["byUpdatedAsc"],
+                         ["active-old", "active-new", "blocked", "done-old", "done-new"])
+        self.assertEqual(data["byIdDesc"],
+                         ["active-old", "active-new", "blocked", "done-old", "done-new"])
+        for order in (data["byUpdatedDesc"], data["byUpdatedAsc"], data["byIdDesc"]):
+            self.assertEqual(order[-2:], [order[-2], order[-1]])
+            self.assertLess(order.index("blocked"), order.index("done-new"))
+            self.assertLess(order.index("done-old"), len(order))
+            self.assertIn(order[0], ("active-new", "active-old"))
+            self.assertNotIn("done-new", order[:2])
+            self.assertNotIn("done-old", order[:2])
 
 
     def test_search_matching_and_helpers(self):
@@ -1428,13 +1560,13 @@ class DashboardUITests(unittest.TestCase):
         self.assertFalse(data["helpers"]["matchEmpty"])
         self.assertEqual(data["helpers"]["matchedCount"], 2)
         self.assertTrue(data["helpers"]["matchedTs"])
-        self.assertEqual(data["initialIds"], ["and-task", "split-task", "old-task", "current-only"])
+        self.assertEqual(data["initialIds"], ["and-task", "current-only", "old-task", "split-task"])
         self.assertEqual(data["caseIds"], ["and-task", "split-task"])
         self.assertIn("Alpha", data["caseMarks"])
         self.assertEqual(data["andIds"], ["and-task"])
         self.assertEqual(data["andCounts"], [1, 1, 0, 0])
         self.assertEqual(data["andStatus"], '검색어 "alpha beta": 1개 작업, 1개 이벤트 일치')
-        self.assertEqual(data["tsIds"], ["and-task", "split-task", "old-task"])
+        self.assertEqual(data["tsIds"], ["and-task", "old-task", "split-task"])
         self.assertEqual(data["needleIds"], ["old-task"])
         self.assertEqual(data["needleHeading"], "일치한 이벤트 1개 (전체 2개)")
         self.assertEqual(data["needleCount"], 1)
@@ -1823,7 +1955,7 @@ class DashboardUITests(unittest.TestCase):
         self.assertEqual(data["initial"]["statusRole"], "status")
         self.assertEqual(data["initial"]["statusLive"], "polite")
         self.assertTrue(data["initial"]["statusHidden"])
-        self.assertEqual(data["initial"]["ids"], ["need-task", "alpha-task", "plain-task"])
+        self.assertEqual(data["initial"]["ids"], ["alpha-task", "need-task", "plain-task"])
         self.assertEqual(data["immediate"]["ids"], data["initial"]["ids"])
         self.assertFalse(data["immediate"]["clearHidden"])
         self.assertTrue(data["debounceOk"])
@@ -1836,14 +1968,14 @@ class DashboardUITests(unittest.TestCase):
         self.assertEqual(data["afterRefresh"]["ids"], ["need-task"])
         self.assertEqual(data["afterRefresh"]["search"], "?q=needle")
         self.assertEqual(data["afterEscape"]["value"], "")
-        self.assertEqual(data["afterEscape"]["ids"], ["need-task", "alpha-task"])
+        self.assertEqual(data["afterEscape"]["ids"], ["alpha-task", "need-task"])
         self.assertFalse(data["afterEscape"]["hasQ"])
         self.assertTrue(data["afterEscape"]["clearHidden"])
         self.assertTrue(data["afterEscape"]["statusHidden"])
         self.assertEqual(data["enterImmediate"]["ids"], ["need-task"])
         self.assertEqual(data["enterImmediate"]["q"], "needle")
         self.assertEqual(data["afterClear"]["value"], "")
-        self.assertEqual(data["afterClear"]["ids"], ["need-task", "alpha-task"])
+        self.assertEqual(data["afterClear"]["ids"], ["alpha-task", "need-task"])
         self.assertFalse(data["afterClear"]["hasQ"])
         self.assertTrue(data["afterClear"]["clearHidden"])
         self.assertTrue(data["afterClear"]["statusHidden"])
