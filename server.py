@@ -91,7 +91,8 @@ PAGE = """<!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#193247">
   <title>봇 작업 현황</title>
   <style>
     :root {
@@ -104,13 +105,21 @@ PAGE = """<!doctype html>
       font-family: Inter, "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
       color: var(--ink);
       background: #f4f7f9;
+      -webkit-text-size-adjust: 100%;
     }
-    * { box-sizing: border-box; }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     body { margin: 0; }
-    button { color: inherit; font: inherit; cursor: pointer; }
+    button { color: inherit; font: inherit; cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
     :focus-visible { outline: 3px solid #2985bd; outline-offset: 3px; }
-    .wrap { width: min(1480px, calc(100% - 64px)); margin-inline: auto; }
-    .masthead { color: #f4f8fa; background: #193247; }
+    .wrap {
+      width: min(1480px, calc(100% - 64px)); margin-inline: auto;
+      padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);
+    }
+    .masthead {
+      color: #f4f8fa; background: #193247;
+      padding-top: env(safe-area-inset-top, 0px);
+      padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);
+    }
     .masthead .wrap, .heading, .refresh-info, .brand, .auto {
       display: flex; align-items: center; gap: 12px;
     }
@@ -121,7 +130,7 @@ PAGE = """<!doctype html>
     .mark i:nth-child(2) { height: 14px; }
     .mark i:nth-child(3) { height: 19px; }
     .auto { gap: 7px; color: #d3dfe7; font-size: .8rem; }
-    main { padding-block: 38px 56px; }
+    main { padding-block: 38px calc(56px + env(safe-area-inset-bottom, 0px)); }
     .heading { justify-content: space-between; flex-wrap: wrap; margin-bottom: 20px; }
     h1 { margin: 0; font-size: clamp(1.7rem, 3vw, 2.15rem); letter-spacing: -.055em; }
     .refresh-info { flex-wrap: wrap; color: var(--muted); font-size: .8rem; }
@@ -197,8 +206,11 @@ PAGE = """<!doctype html>
     .tasks > thead th { border-block: 1px solid var(--line); }
     td { border-bottom: 1px solid var(--line); font-size: .88rem; line-height: 1.55; vertical-align: top; }
     .tasks > tbody > tr:last-child > td { border-bottom: 0; }
-    .task-row { cursor: pointer; }
+    .task-row { cursor: pointer; -webkit-tap-highlight-color: transparent; }
     .task-row:hover, .task-row:focus-within, .task-row.expanded { background: #f6fafc; }
+    .task-row:active { background: #e8f0f5; }
+    .refresh:active, .columns-button:active, .filter:active,
+    .column-move:active, .reset-order:active, .task-toggle:active { background: #dbe7f0; }
     .task-toggle {
       display: flex; align-items: baseline; gap: 9px; padding: 0;
       border: 0; background: transparent; text-align: left; font-weight: 650;
@@ -215,7 +227,9 @@ PAGE = """<!doctype html>
       font: 650 .85rem/1.4 var(--mono); letter-spacing: .01em; overflow-wrap: anywhere;
     }
     .task-title { display: block; overflow-wrap: anywhere; font-weight: 400; }
-    .free-text { white-space: pre-wrap; }
+    .free-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .columns-backdrop { display: none; }
+    .columns-backdrop[hidden] { display: none; }
     .badge {
       display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
       border-radius: 5px; padding: 2px 8px; font-size: .78rem; font-weight: 650;
@@ -241,6 +255,133 @@ PAGE = """<!doctype html>
       .filters { gap: 2px; }
       .filter { padding: 8px; gap: 4px; }
       .empty { text-align: left; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    }
+    @media (max-width: 640px) {
+      .masthead { padding-top: env(safe-area-inset-top, 0px); }
+      .masthead .wrap { min-height: 52px; }
+      .auto { font-size: .75rem; }
+      h1 { font-size: 1.5rem; }
+      .heading { gap: 8px; }
+      .refresh-info { flex-wrap: nowrap; width: 100%; }
+      .refresh { min-height: 44px; min-width: 44px; padding: 10px 16px; touch-action: manipulation; }
+      .filter-bar { flex-direction: column; align-items: stretch; gap: 8px; padding: 10px; }
+      .bot-filter { width: 100%; min-height: 44px; }
+      .bot-filter select { width: 100%; max-width: none; min-height: 44px; font-size: 16px; }
+      .filters {
+        width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;
+        flex-wrap: nowrap; scroll-snap-type: x proximity; padding-bottom: 4px;
+      }
+      .filter { flex: 0 0 auto; min-height: 44px; scroll-snap-align: start; touch-action: manipulation; }
+      .column-menu { width: 100%; margin-left: 0; }
+      .columns-button { width: 100%; min-height: 44px; touch-action: manipulation; }
+      .columns-panel {
+        position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+        width: auto; min-width: 0; max-width: none;
+        max-height: 70vh; max-height: 70dvh;
+        overflow-y: auto; overscroll-behavior: contain;
+        border-radius: 16px 16px 0 0;
+        padding: 8px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+        padding-left: calc(12px + env(safe-area-inset-left, 0px)); padding-right: calc(12px + env(safe-area-inset-right, 0px));
+        box-shadow: 0 -12px 32px rgb(23 45 64 / .25); z-index: 30;
+      }
+      .columns-backdrop {
+        display: block; position: fixed; inset: 0;
+        background: rgb(0 0 0 / .4); z-index: 25; border: 0; padding: 0;
+      }
+      .columns-backdrop[hidden] { display: none; }
+      .columns-panel label { min-height: 44px; font-size: 1rem; }
+      .columns-panel input { width: 1.25rem; height: 1.25rem; }
+      .column-move { width: 44px; height: 44px; min-width: 44px; min-height: 44px; flex-basis: 44px; touch-action: manipulation; }
+      .reset-order { min-height: 44px; touch-action: manipulation; }
+      .board { border: 0; background: transparent; }
+      .scroll { overflow-x: visible; overflow-y: visible; border-radius: 0; background: transparent; }
+      .tasks { min-width: 0 !important; width: 100%; max-width: 100%; }
+      .tasks colgroup, .tasks col { display: none; }
+      .tasks, .tasks thead, .tasks tbody, .tasks tr, .tasks td { display: block; }
+      .tasks thead {
+        position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+        overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%);
+        white-space: nowrap; border: 0;
+      }
+      .tasks tbody tr.task-row { display: flex; flex-direction: column; }
+      .tasks tbody tr.task-row {
+        border: 1px solid var(--line); border-radius: 12px; background: white;
+        margin: 10px 10px; padding: 12px 14px; max-width: calc(100% - 20px);
+        overflow-wrap: anywhere; -webkit-tap-highlight-color: transparent;
+      }
+      .tasks tbody tr.task-row:active { background: #e8f0f5; }
+      .tasks tbody tr.task-row > td {
+        display: flex; gap: 12px; align-items: flex-start;
+        border-bottom: 0; padding: 7px 0;
+        min-width: 0; max-width: 100%; overflow-wrap: anywhere;
+      }
+      .tasks tbody tr.task-row > td::before {
+        content: attr(data-label);
+        display: inline-block; flex: 0 0 6.5rem; width: 6.5rem; flex-shrink: 0;
+        color: var(--muted); font-size: .78rem; font-weight: 650; line-height: 1.6;
+        overflow-wrap: anywhere;
+      }
+      .tasks tbody tr.task-row > td > * { overflow-wrap: anywhere; min-width: 0; }
+      .tasks tbody tr.task-row > td:has(.badge) > *,
+      .tasks tbody tr.task-row > td:has(time) > * {
+        flex: 0 1 auto;
+      }
+      .tasks tbody tr.task-row > td:has(.task-toggle),
+      .tasks tbody tr.task-row > td[data-column="title"],
+      .tasks tbody tr.task-row > td.title-cell {
+        order: -1; display: block;
+        min-height: 44px; padding: 4px 0 10px;
+      }
+      .tasks tbody tr.task-row > td:has(.task-toggle)::before,
+      .tasks tbody tr.task-row > td[data-column="title"]::before,
+      .tasks tbody tr.task-row > td.title-cell::before { content: none; display: none; }
+      .task-toggle { width: 100%; min-height: 44px; touch-action: manipulation; }
+      .task-id { overflow-wrap: anywhere; }
+      .task-title { overflow-wrap: anywhere; white-space: normal; }
+      .free-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+      .tasks td.empty {
+        display: block; text-align: left; padding: 12px 14px; margin: 10px 10px;
+        color: var(--muted); overflow-wrap: anywhere;
+      }
+      .tasks td.empty::before { content: none; display: none; }
+      .history { display: block; margin: 0 10px 10px; }
+      .history > td { display: block; border: 0; padding: 0; background: transparent; }
+      .history > td::before { content: none; display: none; }
+      .history h2 { margin: 0 0 8px; }
+      .history table { display: block; border: 0; }
+      .history thead {
+        position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+        overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%);
+        white-space: nowrap; border: 0;
+      }
+      .history tbody { display: block; }
+      .history tbody tr {
+        display: flex; flex-wrap: wrap; background: white;
+        border: 1px solid var(--line); border-radius: 10px;
+        margin: 0 0 8px; padding: 8px 12px; overflow-wrap: anywhere;
+      }
+      .history tbody td {
+        display: block; border-bottom: 0; padding: 6px 0;
+        min-width: 0; overflow-wrap: anywhere;
+      }
+      .history tbody td::before {
+        content: attr(data-label); float: left; max-width: 40%; margin-right: 8px;
+        color: var(--muted); font-size: .78rem; font-weight: 650; line-height: 1.6;
+        overflow-wrap: anywhere;
+      }
+      .history tbody td[data-label="시각"] { flex: 1 1 52%; min-width: 0; }
+      .history tbody td[data-label="단계"] { flex: 1 1 38%; min-width: 0; }
+      .history tbody td[data-label="메모"],
+      .history tbody td[data-label="다음 할 일"] { flex: 1 1 100%; min-width: 0; }
+      .refresh, .columns-button, .filter, .column-move, .reset-order {
+        min-height: 44px; touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+      }
+      .bot-filter select { min-height: 44px; }
+      .task-id, .task-title, .tasks tbody tr.task-row > td { word-break: normal; }
     }
   </style>
 </head>
@@ -271,6 +412,7 @@ PAGE = """<!doctype html>
         <div class="column-menu">
           <button type="button" id="columns-button" class="columns-button" aria-haspopup="true" aria-expanded="false" aria-controls="columns-panel">열 ▾</button>
           <div id="columns-panel" class="columns-panel" role="group" aria-label="표시할 열" hidden></div>
+          <div id="columns-backdrop" class="columns-backdrop" hidden></div>
         </div>
       </div>
       <div class="scroll" tabindex="0" role="region" aria-label="작업 표">
@@ -302,6 +444,7 @@ PAGE = """<!doctype html>
     const headRow = table.querySelector("thead tr");
     const columnsButton = document.getElementById("columns-button");
     const columnsPanel = document.getElementById("columns-panel");
+    const columnsBackdrop = document.getElementById("columns-backdrop");
     const COLUMNS = [
       {key: "bot", label: "봇", colClass: "col-bot", width: 10,
         cell: task => textCell(botName(task))},
@@ -309,7 +452,7 @@ PAGE = """<!doctype html>
         cell: task => stageCell(task.stage)},
       {key: "title", label: "작업", colClass: "col-title", width: 23,
         cell: (task, expanded) => {
-          const cell = element("td");
+          const cell = element("td", "title-cell");
           const toggle = element("button", "task-toggle");
           toggle.type = "button";
           toggle.dataset.taskId = task.task_id;
@@ -487,8 +630,11 @@ PAGE = """<!doctype html>
       }
       const body = table.createTBody();
       for (const event of task.events) {
-        body.insertRow().append(timeCell(event.ts), stageCell(event.stage),
-                                textCell(event.note), textCell(event.next));
+        const time = timeCell(event.ts); time.dataset.label = "시각";
+        const stage = stageCell(event.stage); stage.dataset.label = "단계";
+        const note = textCell(event.note); note.dataset.label = "메모";
+        const next = textCell(event.next); next.dataset.label = "다음 할 일";
+        body.insertRow().append(time, stage, note, next);
       }
       cell.append(element("h2", "", "이벤트 이력"), table);
       row.append(cell);
@@ -719,6 +865,7 @@ PAGE = """<!doctype html>
     function setPanelOpen(open) {
       columnsButton.setAttribute("aria-expanded", String(open));
       columnsPanel.hidden = !open;
+      columnsBackdrop.hidden = !open;
     }
 
     function render() {
@@ -753,7 +900,10 @@ PAGE = """<!doctype html>
           });
         }
         for (const column of visibleColumns()) {
-          row.append(column.cell(task, expanded));
+          const cell = column.cell(task, expanded);
+          cell.dataset.label = column.label;
+          cell.dataset.column = column.key;
+          row.append(cell);
         }
         const toggle = visible.has("title") ? row.querySelector(".task-toggle") : null;
         row.addEventListener("click", () => {
@@ -807,6 +957,10 @@ PAGE = """<!doctype html>
 
     columnsButton.addEventListener("click", () => {
       setPanelOpen(!isPanelOpen());
+    });
+
+    columnsBackdrop.addEventListener("click", () => {
+      setPanelOpen(false);
     });
 
     columnsPanel.addEventListener("change", event => {

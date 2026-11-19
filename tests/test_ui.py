@@ -220,7 +220,12 @@ class DashboardUITests(unittest.TestCase):
             with self.subTest(width=width):
                 data = self.observe_page(exercise, width)
                 self.assertEqual(data["mobile"], width == 390)
-                self.assertTrue(data["aligned"])
+                if width == 1280:
+                    self.assertTrue(data["aligned"])
+                else:
+                    # 640px 이하 카드에서는 thead가 시각적으로 숨겨져
+                    # 데스크톱 열 정렬이 성립하지 않는다. 헤더 셀은 DOM에 남는다.
+                    self.assertFalse(data["aligned"])
                 self.assertEqual(data["sortedBy"], "마지막 업데이트")
                 self.assertEqual(data["columns"], [
                     ["봇", "col-bot", "Engineering"], ["현재 단계", "col-stage", "코딩"],
@@ -1017,3 +1022,260 @@ class DashboardUITests(unittest.TestCase):
         self.assertEqual(data["rowFocus"], [True, "0"])
         self.assertEqual(data["rowOpen"], [True, 6, "active", "TR"])
         self.assertEqual(data["rowClose"], [True, True, "active", "TR"])
+
+    def test_mobile_cards_block_display_and_no_overflow(self):
+        # Headless Chrome enforces a min window width of 500px, so
+        # --window-size=390 gives innerWidth 500. 500 is still <=640,
+        # so the card layout is exercised. We assert via matchMedia.
+        exercise = """
+            const table = document.querySelector(".tasks");
+            observations.innerWidth = window.innerWidth;
+            observations.is640 = matchMedia("(max-width: 640px)").matches;
+            observations.docScroll = document.documentElement.scrollWidth;
+            observations.bodyScroll = document.body.scrollWidth;
+            observations.noOverflow = document.documentElement.scrollWidth <= window.innerWidth
+              && document.body.scrollWidth <= window.innerWidth;
+            const row = table.tBodies[0].rows[0];
+            observations.tdDisplay = getComputedStyle(row.cells[0]).display;
+            observations.tableDisplay = getComputedStyle(table).display;
+            observations.theadDisplay = getComputedStyle(table.tHead).display;
+            observations.theadClipPath = getComputedStyle(table.tHead).clipPath;
+            observations.theadClip = getComputedStyle(table.tHead).clip;
+            observations.theadInDom = table.tHead !== null && table.tHead.rows[0].cells.length === 7;
+            observations.scrollOverflowX = getComputedStyle(document.querySelector(".scroll")).overflowX;
+            snapshot.tasks = [{task_id: "a".repeat(80), bot: "B".repeat(60),
+              title: "긴 제목", stage: "코딩", status: "진행 중",
+              started: stamp, updated: stamp, note: "n".repeat(120), next: "m".repeat(120), events: []}];
+            await tick();
+            observations.afterLong = {
+              noOverflow: document.documentElement.scrollWidth <= window.innerWidth
+                && document.body.scrollWidth <= window.innerWidth,
+              tdDisplay: getComputedStyle(table.tBodies[0].rows[0].cells[0]).display,
+              scrollWidth: document.documentElement.scrollWidth,
+            };
+        """
+        data = self.observe_page(exercise, 390)
+        self.assertTrue(data["is640"])
+        self.assertTrue(data["noOverflow"])
+        self.assertEqual(data["tdDisplay"], "flex")
+        self.assertEqual(data["tableDisplay"], "block")
+        # thead stays in DOM for a11y/drag code, visually hidden via clip.
+        self.assertTrue(data["theadInDom"])
+        self.assertNotEqual(data["theadDisplay"], "none")
+        self.assertIn("inset(50%)", data["theadClipPath"] + " " + (data["theadClip"] or ""))
+        self.assertNotEqual(data["scrollOverflowX"], "auto")
+        self.assertTrue(data["afterLong"]["noOverflow"])
+        self.assertEqual(data["afterLong"]["tdDisplay"], "flex")
+        self.assertLessEqual(data["afterLong"]["scrollWidth"], data["innerWidth"])
+
+    def test_mobile_title_cell_order_first(self):
+        exercise = """
+            const table = document.querySelector(".tasks");
+            const row = table.tBodies[0].rows[0];
+            const titleCell = row.querySelector('td[data-column="title"]')
+              || row.querySelector("td.title-cell")
+              || [...row.cells].find(td => td.querySelector(".task-toggle"));
+            observations.is640 = matchMedia("(max-width: 640px)").matches;
+            observations.titleInfo = [titleCell.dataset.column, titleCell.className,
+              !!titleCell.querySelector(".task-toggle"),
+              getComputedStyle(titleCell).order, getComputedStyle(titleCell).display];
+            observations.domOrderBefore = [...row.cells].map(td => td.dataset.column);
+            const rects = [...row.cells].map(td => [td.dataset.column, td.getBoundingClientRect().top]);
+            rects.sort((a, b) => a[1] - b[1]);
+            observations.visualFirstBefore = rects[0][0];
+            const button = document.getElementById("columns-button");
+            const panel = document.getElementById("columns-panel");
+            const moveButton = (key, direction) => panel.querySelector(
+              `.column-item[data-column="${key}"] button[data-direction="${direction}"]`);
+            button.click();
+            moveButton("title", "down").click();
+            moveButton("title", "down").click();
+            moveButton("title", "down").click();
+            const rowAfter = table.tBodies[0].rows[0];
+            const titleAfter = rowAfter.querySelector('td[data-column="title"]')
+              || rowAfter.querySelector("td.title-cell")
+              || [...rowAfter.cells].find(td => td.querySelector(".task-toggle"));
+            observations.domOrderAfter = [...rowAfter.cells].map(td => td.dataset.column);
+            observations.titleAfterInfo = [titleAfter.dataset.column, titleAfter.className,
+              !!titleAfter.querySelector(".task-toggle"),
+              getComputedStyle(titleAfter).order, getComputedStyle(titleAfter).display];
+            const rectsAfter = [...rowAfter.cells].map(td => [td.dataset.column, td.getBoundingClientRect().top]);
+            rectsAfter.sort((a, b) => a[1] - b[1]);
+            observations.visualFirstAfter = rectsAfter[0][0];
+            const titleTop = titleAfter.getBoundingClientRect().top;
+            const minOtherTop = Math.min(...[...rowAfter.cells].filter(td => td !== titleAfter)
+              .map(td => td.getBoundingClientRect().top));
+            observations.titleOnTop = titleTop <= minOtherTop + 1;
+        """
+        data = self.observe_page(exercise, 390)
+        self.assertTrue(data["is640"])
+        self.assertEqual(data["titleInfo"][0], "title")
+        self.assertIn("title-cell", data["titleInfo"][1])
+        self.assertTrue(data["titleInfo"][2])
+        self.assertEqual(data["titleInfo"][3], "-1")
+        self.assertEqual(data["titleInfo"][4], "block")
+        self.assertEqual(data["visualFirstBefore"], "title")
+        self.assertNotEqual(data["domOrderAfter"][0], "title")
+        self.assertEqual(data["titleAfterInfo"][0], "title")
+        self.assertIn("title-cell", data["titleAfterInfo"][1])
+        self.assertTrue(data["titleAfterInfo"][2])
+        self.assertEqual(data["titleAfterInfo"][3], "-1")
+        self.assertEqual(data["visualFirstAfter"], "title")
+        self.assertTrue(data["titleOnTop"])
+
+    def test_mobile_data_labels_respect_order_and_visibility(self):
+        exercise = """
+            const table = document.querySelector(".tasks");
+            const button = document.getElementById("columns-button");
+            const panel = document.getElementById("columns-panel");
+            const labelsOf = () => [...table.tBodies[0].rows[0].cells].map(td => td.dataset.label);
+            const expectedOf = () => [...table.tHead.rows[0].cells].map(th => th.textContent);
+            observations.initialLabels = labelsOf();
+            observations.initialExpected = expectedOf();
+            button.click();
+            panel.querySelector('input[data-column="stage"]').click();
+            observations.afterHideLabels = labelsOf();
+            observations.afterHideExpected = expectedOf();
+            panel.querySelector('.column-item[data-column="bot"] button[data-direction="down"]').click();
+            observations.afterMoveLabels = labelsOf();
+            observations.afterMoveExpected = expectedOf();
+            observations.allHaveLabel = [...table.tBodies[0].rows[0].cells].every(td => typeof td.dataset.label === "string" && td.dataset.label.length > 0);
+        """
+        data = self.observe_page(exercise, 390)
+        self.assertEqual(data["initialLabels"], data["initialExpected"])
+        self.assertEqual(data["initialLabels"],
+                         ["봇", "현재 단계", "작업", "시작", "마지막 업데이트", "메모", "다음 할 일"])
+        self.assertEqual(data["afterHideLabels"], data["afterHideExpected"])
+        self.assertNotIn("현재 단계", data["afterHideLabels"])
+        self.assertEqual(data["afterMoveLabels"], data["afterMoveExpected"])
+        self.assertTrue(data["allHaveLabel"])
+
+    def test_mobile_history_data_labels(self):
+        exercise = """
+            const table = document.querySelector(".tasks");
+            snapshot.tasks = snapshot.tasks.map(entry => entry.task_id === "active"
+              ? {...entry, events: [
+                  {ts: stamp, stage: "계획", note: "첫 메모", next: "다음 점검"},
+                  {ts: stamp, stage: "코딩", note: "둘째 메모", next: "셋째 할 일"}]}
+              : entry);
+            await tick();
+            const toggle = [...document.querySelectorAll(".task-toggle")]
+              .find(node => node.dataset.taskId === "active");
+            toggle.click();
+            const history = table.querySelector(".task-row + .history");
+            const histTable = history.querySelector("table");
+            const histBody = histTable.tBodies[0];
+            observations.histHeaders = [...histTable.tHead.rows[0].cells].map(th => th.textContent);
+            observations.histLabels0 = [...histBody.rows[0].cells].map(td => td.dataset.label);
+            observations.histLabels1 = [...histBody.rows[1].cells].map(td => td.dataset.label);
+            observations.histDisplay = getComputedStyle(histBody.rows[0].cells[0]).display;
+            observations.histRowDisplay = getComputedStyle(histBody.rows[0]).display;
+            observations.histAllHaveLabel = [...histBody.querySelectorAll("td")]
+              .every(td => typeof td.dataset.label === "string" && td.dataset.label.length > 0);
+        """
+        data = self.observe_page(exercise, 390)
+        self.assertEqual(data["histHeaders"], ["시각", "단계", "메모", "다음 할 일"])
+        self.assertEqual(data["histLabels0"], data["histHeaders"])
+        self.assertEqual(data["histLabels1"], data["histHeaders"])
+        self.assertTrue(data["histAllHaveLabel"])
+        # history mini-cards: stacked block cells.
+        self.assertEqual(data["histDisplay"], "block")
+
+    def test_mobile_columns_backdrop_toggles_with_panel(self):
+        exercise = """
+            const button = document.getElementById("columns-button");
+            const panel = document.getElementById("columns-panel");
+            const backdrop = document.getElementById("columns-backdrop");
+            observations.exists = [backdrop !== null, backdrop && backdrop.id,
+              backdrop && backdrop.className, backdrop && backdrop.tagName];
+            observations.is640 = matchMedia("(max-width: 640px)").matches;
+            observations.initial = [panel.hidden, backdrop.hidden, button.getAttribute("aria-expanded")];
+            button.click();
+            observations.opened = [panel.hidden, backdrop.hidden, button.getAttribute("aria-expanded")];
+            observations.openDisplay = getComputedStyle(backdrop).display;
+            observations.sheetPosition = getComputedStyle(panel).position;
+            backdrop.click();
+            observations.afterBackdropClick = [panel.hidden, backdrop.hidden, button.getAttribute("aria-expanded")];
+            button.click();
+            observations.reopened = [panel.hidden, backdrop.hidden];
+            document.querySelector("h1").click();
+            observations.afterOutside = [panel.hidden, backdrop.hidden];
+            button.click();
+            const first = panel.querySelector("input");
+            first.focus();
+            first.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true, cancelable: true}));
+            observations.afterEscape = [panel.hidden, backdrop.hidden, document.activeElement.id];
+        """
+        data = self.observe_page(exercise, 390)
+        self.assertEqual(data["exists"], [True, "columns-backdrop", "columns-backdrop", "DIV"])
+        self.assertTrue(data["is640"])
+        self.assertEqual(data["initial"], [True, True, "false"])
+        self.assertEqual(data["opened"], [False, False, "true"])
+        # On mobile the backdrop is a visible fixed overlay.
+        self.assertNotEqual(data["openDisplay"], "none")
+        self.assertEqual(data["sheetPosition"], "fixed")
+        self.assertEqual(data["afterBackdropClick"], [True, True, "false"])
+        self.assertEqual(data["reopened"], [False, False])
+        self.assertEqual(data["afterOutside"], [True, True])
+        self.assertEqual(data["afterEscape"], [True, True, "columns-button"])
+
+
+class MobileStaticTests(unittest.TestCase):
+    def test_viewport_meta(self):
+        self.assertIn("width=device-width", server.PAGE)
+        self.assertIn("initial-scale=1", server.PAGE)
+        self.assertIn("viewport-fit=cover", server.PAGE)
+        self.assertIn('<meta name="theme-color" content="#193247">', server.PAGE)
+        self.assertNotIn("apple-mobile-web-app-capable", server.PAGE)
+        self.assertIn("-webkit-text-size-adjust", server.PAGE)
+        self.assertIn("100%", server.PAGE)
+
+    def test_mobile_css_block_and_safe_area(self):
+        self.assertIn("@media (max-width: 640px)", server.PAGE)
+        self.assertIn("@media (max-width: 700px)", server.PAGE)
+        idx = server.PAGE.index("@media (max-width: 640px)")
+        block = server.PAGE[idx:]
+        for inset in ("safe-area-inset-top", "safe-area-inset-left",
+                      "safe-area-inset-right", "safe-area-inset-bottom"):
+            self.assertIn("env(" + inset, block)
+            self.assertIn("env(" + inset + ", 0", block)
+        # Bottom sheet requirements.
+        self.assertIn("position: fixed", block)
+        self.assertIn("max-height: 70vh", block)
+        self.assertIn("70dvh", block)
+        self.assertIn("border-radius: 16px 16px 0 0", block)
+        self.assertIn("overscroll-behavior: contain", block)
+        self.assertIn("calc(12px + env(safe-area-inset-bottom", block)
+        self.assertIn("calc(12px + env(safe-area-inset-left", block)
+        self.assertIn("calc(12px + env(safe-area-inset-right", block)
+        # Title must stay first in the stacked card regardless of column order.
+        self.assertIn("order: -1", block)
+        self.assertIn('td[data-column="title"]', block)
+        self.assertIn("td.title-cell", block)
+        self.assertIn("td:has(.task-toggle)", block)
+        # Label/value rows align with a fixed-width label column.
+        self.assertIn("display: inline-block", block)
+        self.assertIn("6.5rem", block)
+        self.assertIn("flex: 0 0 6.5rem", block)
+        self.assertIn("width: 6.5rem", block)
+        label_idx = block.index(".tasks tbody tr.task-row > td::before")
+        label_rule = block[label_idx:block.index("}", label_idx)]
+        self.assertNotIn("float:", label_rule)
+        self.assertIn("display: inline-block", label_rule)
+        self.assertIn("6.5rem", label_rule)
+        # Card requirements.
+        self.assertIn("min-width: 0", block)
+        self.assertIn("content: attr(data-label)", block)
+        self.assertIn("clip-path: inset(50%)", block)
+        self.assertIn("border-radius: 12px", block)
+        self.assertIn("margin: 10px", block)
+        self.assertIn("touch-action: manipulation", server.PAGE)
+        self.assertIn("-webkit-tap-highlight-color: transparent", server.PAGE)
+        self.assertIn(":active", block)
+        self.assertIn("prefers-reduced-motion", server.PAGE)
+        self.assertIn("font-size: 16px", block)
+        self.assertIn("font-size: 1rem", block)
+        self.assertIn("-webkit-overflow-scrolling: touch", block)
+        self.assertIn("min-height: 44px", block)
+        # thead must not be display:none anywhere in the mobile block.
+        self.assertNotIn("thead { display: none", block)
