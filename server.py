@@ -314,6 +314,21 @@ PAGE = """<!doctype html>
     .badge.blocked { background: #fbe5e5; color: #a12f36; }
     .history > td { padding: 15px 25px 20px; background: #f4f8fa; }
     .history h2 { margin: 0 0 9px; color: #385568; font-size: .9rem; }
+    .history-summary {
+      background: white; border: 1px solid #dae2e8; border-radius: 8px;
+      padding: 10px 12px; margin: 0 0 10px; font-size: .85rem;
+      box-sizing: border-box; max-width: 100%; min-width: 0; overflow-wrap: anywhere;
+    }
+    .history-summary .summary-id { display: block; font-weight: 700; overflow-wrap: anywhere; }
+    .history-summary .summary-title { display: block; font-weight: 400; overflow-wrap: anywhere; }
+    .history-summary dl {
+      display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+      gap: 6px 12px; margin: 8px 0 0; padding: 0;
+      min-width: 0; max-width: 100%; box-sizing: border-box;
+    }
+    .history-summary dt { color: var(--muted); font-size: .78rem; font-weight: 700; line-height: 1.5; }
+    .history-summary dd { margin: 0; min-width: 0; overflow-wrap: anywhere; line-height: 1.5; }
+    .history-summary dd.summary-wide { grid-column: 2 / -1; white-space: pre-wrap; overflow-wrap: anywhere; }
     .history th, .history td { padding: 8px 10px; }
     .history table { border-left: 2px solid #b5cddb; }
     .history th { background: #e9eff3; }
@@ -429,6 +444,7 @@ PAGE = """<!doctype html>
       .history > td { display: block; border: 0; padding: 0; background: transparent; }
       .history > td::before { content: none; display: none; }
       .history h2 { margin: 0 0 8px; }
+      .history-summary dl { grid-template-columns: auto minmax(0, 1fr); }
       .history table { display: block; border: 0; }
       .history thead {
         position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
@@ -809,6 +825,59 @@ PAGE = """<!doctype html>
       return cell;
     }
 
+    function historySummary(task, keywords) {
+      const section = element("section", "history-summary");
+      section.setAttribute("aria-label", "작업 요약");
+      const idNode = element("strong", "summary-id");
+      appendHighlightedText(idNode, task.task_id ?? "", keywords);
+      section.append(idNode);
+      if (task.title) {
+        const titleNode = element("span", "summary-title");
+        appendHighlightedText(titleNode, task.title, keywords);
+        section.append(titleNode);
+      }
+      const dl = element("dl");
+      dl.append(element("dt", "", "봇"));
+      const botDd = element("dd");
+      appendHighlightedText(botDd, botName(task), keywords);
+      dl.append(botDd);
+      dl.append(element("dt", "", "현재 단계"));
+      const stageDd = element("dd");
+      stageDd.append(stageCell(task.stage, keywords).querySelector(".badge"));
+      dl.append(stageDd);
+      dl.append(element("dt", "", "상태"));
+      const statusDd = element("dd");
+      appendHighlightedText(statusDd, taskStatus(task), keywords);
+      dl.append(statusDd);
+      dl.append(element("dt", "", "시작"));
+      const startedDd = element("dd");
+      startedDd.append(timeCell(task.started, keywords).querySelector("time"));
+      dl.append(startedDd);
+      dl.append(element("dt", "", "마지막 업데이트"));
+      const updatedDd = element("dd");
+      updatedDd.append(timeCell(task.updated, keywords).querySelector("time"));
+      dl.append(updatedDd);
+      dl.append(element("dt", "", "이벤트 수"));
+      const countDd = element("dd");
+      const eventCount = Array.isArray(task.events) ? task.events.length : 0;
+      appendHighlightedText(countDd, `${eventCount}개`, keywords);
+      dl.append(countDd);
+      if (task.note) {
+        dl.append(element("dt", "", "메모"));
+        const noteDd = element("dd", "summary-wide");
+        appendHighlightedText(noteDd, task.note, keywords);
+        dl.append(noteDd);
+      }
+      if (task.next) {
+        dl.append(element("dt", "", "다음 할 일"));
+        const nextDd = element("dd", "summary-wide");
+        appendHighlightedText(nextDd, task.next, keywords);
+        dl.append(nextDd);
+      }
+      section.append(dl);
+      return section;
+    }
+
     function historyRow(task, id, options) {
       const row = element("tr", "history");
       row.id = id;
@@ -838,7 +907,7 @@ PAGE = """<!doctype html>
         const next = textCell(event.next, activeKeywords); next.dataset.label = "다음 할 일";
         eventRow.append(time, stage, note, next);
       }
-      cell.append(element("h2", "", heading), table);
+      cell.append(element("h2", "", heading), historySummary(task, keywords), table);
       row.append(cell);
       return row;
     }

@@ -2041,6 +2041,246 @@ class DashboardUITests(unittest.TestCase):
                     self.assertGreaterEqual(layout["wrapWidth"], layout["filterWidth"] - 32)
 
 
+    def test_history_summary_expanded_at_both_widths(self):
+        extra = """
+        snapshot.tasks = [
+          {task_id: "active", bot: "Engineering", title: "기능 구현", stage: "접수", status: "진행 중",
+           started: "2026-11-18T10:00:00+09:00", updated: "2026-11-18T12:00:00+09:00",
+           note: "구현 중", next: "리뷰 요청",
+           events: [
+             {task_id: "active", title: "기능 구현", bot: "Engineering", stage: "접수", note: "첫 메모", next: "다음 점검", ts: "2026-11-18T10:00:00+09:00"},
+             {task_id: "active", title: "기능 구현", bot: "Engineering", stage: "코딩", note: "구현 중", next: "리뷰 요청", ts: "2026-11-18T12:00:00+09:00"}
+           ]},
+          {task_id: "plain", bot: "QA", title: "", stage: "완료", status: "완료",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T11:00:00+09:00",
+           note: "", next: "",
+           events: [
+             {task_id: "plain", title: "", bot: "QA", stage: "완료", note: "", next: "", ts: "2026-11-18T11:00:00+09:00"}
+           ]}
+        ];
+        """
+        exercise = """
+            const table = document.querySelector(".tasks");
+            const toggleActive = [...document.querySelectorAll(".task-toggle")].find(node => node.dataset.taskId === "active");
+            toggleActive.click();
+            const history = table.querySelector(".history");
+            const cell = history.cells[0];
+            const h2 = cell.querySelector("h2");
+            const summary = cell.querySelector(".history-summary");
+            const histTable = cell.querySelector("table");
+            observations.is640 = matchMedia("(max-width: 640px)").matches;
+            observations.order = {
+              h2Text: h2.textContent,
+              summaryTag: summary ? summary.tagName : null,
+              ariaLabel: summary ? summary.getAttribute("aria-label") : null,
+              h2NextIsSummary: h2.nextElementSibling === summary,
+              summaryNextIsTable: summary ? summary.nextElementSibling === histTable : null,
+              children: [...cell.children].map(node => node.tagName + " " + node.className),
+            };
+            const sectionStyle = summary ? getComputedStyle(summary) : null;
+            observations.sectionStyle = sectionStyle ? {
+              backgroundColor: sectionStyle.backgroundColor,
+              borderTopWidth: sectionStyle.borderTopWidth,
+              borderTopStyle: sectionStyle.borderTopStyle,
+              borderTopColor: sectionStyle.borderTopColor,
+              borderTopLeftRadius: sectionStyle.borderTopLeftRadius,
+              padding: [sectionStyle.paddingTop, sectionStyle.paddingRight, sectionStyle.paddingBottom, sectionStyle.paddingLeft],
+              marginBottom: sectionStyle.marginBottom,
+              marginTop: sectionStyle.marginTop,
+              fontSize: sectionStyle.fontSize,
+            } : null;
+            const idEl = summary ? summary.querySelector(".summary-id") : null;
+            observations.idInfo = idEl ? {
+              tagName: idEl.tagName, className: idEl.className, textContent: idEl.textContent,
+              fontWeight: getComputedStyle(idEl).fontWeight,
+              backgroundColor: getComputedStyle(idEl).backgroundColor,
+            } : null;
+            const titleEl = summary ? summary.querySelector(".summary-title") : null;
+            observations.titleInfo = titleEl ? {
+              textContent: titleEl.textContent,
+              fontWeight: getComputedStyle(titleEl).fontWeight,
+            } : null;
+            const dl = summary ? summary.querySelector("dl") : null;
+            const dlStyle = dl ? getComputedStyle(dl) : null;
+            observations.dlInfo = dl ? {
+              tagName: dl.tagName, display: dlStyle.display,
+              gridTemplateColumns: dlStyle.gridTemplateColumns,
+              trackCount: dlStyle.gridTemplateColumns ? dlStyle.gridTemplateColumns.split(" ").filter(Boolean).length : 0,
+            } : null;
+            observations.dts = dl ? [...dl.querySelectorAll("dt")].map(node => node.textContent) : [];
+            observations.dds = dl ? [...dl.querySelectorAll("dd")].map(node => node.textContent) : [];
+            const dtEl = dl ? dl.querySelector("dt") : null;
+            observations.dtStyle = dtEl ? {
+              color: getComputedStyle(dtEl).color,
+              fontWeight: getComputedStyle(dtEl).fontWeight,
+              fontSize: getComputedStyle(dtEl).fontSize,
+            } : null;
+            const badgeEl = summary ? summary.querySelector(".badge") : null;
+            observations.badgeInfo = badgeEl ? {
+              className: badgeEl.className, textContent: badgeEl.textContent,
+              backgroundColor: getComputedStyle(badgeEl).backgroundColor,
+              color: getComputedStyle(badgeEl).color,
+            } : null;
+            observations.times = summary ? [...summary.querySelectorAll("time")].map(node => [node.getAttribute("datetime"), node.textContent]) : [];
+            const wideDd = dl ? dl.querySelector("dd.summary-wide") : null;
+            observations.wideStyle = wideDd ? {
+              whiteSpace: getComputedStyle(wideDd).whiteSpace,
+              overflowWrap: getComputedStyle(wideDd).overflowWrap,
+            } : null;
+            observations.histHeaders = [...histTable.tHead.rows[0].cells].map(th => th.textContent);
+            observations.noOverflow = [document.documentElement.scrollWidth <= window.innerWidth,
+              document.body.scrollWidth <= window.innerWidth];
+            const togglePlain = [...document.querySelectorAll(".task-toggle")].find(node => node.dataset.taskId === "plain");
+            togglePlain.click();
+            const historyPlain = table.querySelector(".history");
+            const summaryPlain = historyPlain ? historyPlain.querySelector(".history-summary") : null;
+            const dlPlain = summaryPlain ? summaryPlain.querySelector("dl") : null;
+            observations.plain = {
+              dts: dlPlain ? [...dlPlain.querySelectorAll("dt")].map(node => node.textContent) : [],
+              dds: dlPlain ? [...dlPlain.querySelectorAll("dd")].map(node => node.textContent) : [],
+              hasTitle: summaryPlain ? summaryPlain.querySelector(".summary-title") !== null : null,
+              hasWide: dlPlain ? dlPlain.querySelector("dd.summary-wide") !== null : null,
+              heading: historyPlain ? historyPlain.querySelector("h2").textContent : null,
+              orderOk: historyPlain ? (historyPlain.querySelector("h2").nextElementSibling === summaryPlain) : null,
+            };
+            observations.noOverflowAfterPlain = [document.documentElement.scrollWidth <= window.innerWidth,
+              document.body.scrollWidth <= window.innerWidth];
+        """
+        for width in (1280, 390):
+            with self.subTest(width=width):
+                data = self.observe_page(exercise, width, extra_setup=extra)
+                self.assertEqual(data["is640"], width == 390 or (width == 390))
+                self.assertEqual(data["order"]["h2Text"], "이벤트 이력")
+                self.assertEqual(data["order"]["summaryTag"], "SECTION")
+                self.assertEqual(data["order"]["ariaLabel"], "작업 요약")
+                self.assertTrue(data["order"]["h2NextIsSummary"])
+                self.assertTrue(data["order"]["summaryNextIsTable"])
+                style = data["sectionStyle"]
+                self.assertEqual(style["backgroundColor"], "rgb(255, 255, 255)")
+                self.assertEqual(style["borderTopWidth"], "1px")
+                self.assertEqual(style["borderTopStyle"], "solid")
+                self.assertEqual(style["borderTopColor"], "rgb(218, 226, 232)")
+                self.assertEqual(style["borderTopLeftRadius"], "8px")
+                self.assertEqual(style["padding"], ["10px", "12px", "10px", "12px"])
+                self.assertEqual(style["marginBottom"], "10px")
+                self.assertEqual(style["marginTop"], "0px")
+                self.assertAlmostEqual(float(style["fontSize"].replace("px", "")), 13.6, places=1)
+                self.assertEqual(data["idInfo"]["tagName"], "STRONG")
+                self.assertEqual(data["idInfo"]["className"], "summary-id")
+                self.assertEqual(data["idInfo"]["textContent"], "active")
+                self.assertEqual(data["idInfo"]["fontWeight"], "700")
+                self.assertEqual(data["idInfo"]["backgroundColor"], "rgba(0, 0, 0, 0)")
+                self.assertEqual(data["titleInfo"]["textContent"], "기능 구현")
+                self.assertEqual(data["titleInfo"]["fontWeight"], "400")
+                self.assertEqual(data["dlInfo"]["tagName"], "DL")
+                self.assertEqual(data["dlInfo"]["display"], "grid")
+                if width == 1280:
+                    self.assertEqual(data["dlInfo"]["trackCount"], 4)
+                else:
+                    self.assertEqual(data["dlInfo"]["trackCount"], 2)
+                self.assertEqual(data["dts"], ["봇", "현재 단계", "상태", "시작", "마지막 업데이트", "이벤트 수", "메모", "다음 할 일"])
+                self.assertEqual(data["dds"], ["Engineering", "접수", "진행 중", "2026-11-18 10:00", "2026-11-18 12:00", "2개", "구현 중", "리뷰 요청"])
+                dt = data["dtStyle"]
+                self.assertEqual(dt["color"], "rgb(83, 104, 121)")
+                self.assertEqual(dt["fontWeight"], "700")
+                self.assertLess(float(dt["fontSize"].replace("px", "")), float(style["fontSize"].replace("px", "")))
+                self.assertEqual(data["badgeInfo"]["className"], "badge intake")
+                self.assertEqual(data["badgeInfo"]["textContent"], "접수")
+                self.assertEqual(data["badgeInfo"]["backgroundColor"], "rgb(236, 232, 251)")
+                self.assertEqual(data["badgeInfo"]["color"], "rgb(74, 58, 153)")
+                self.assertEqual(data["times"], [
+                    ["2026-11-18T10:00:00+09:00", "2026-11-18 10:00"],
+                    ["2026-11-18T12:00:00+09:00", "2026-11-18 12:00"],
+                ])
+                self.assertEqual(data["wideStyle"]["whiteSpace"], "pre-wrap")
+                self.assertEqual(data["wideStyle"]["overflowWrap"], "anywhere")
+                self.assertEqual(data["histHeaders"], ["시각", "단계", "메모", "다음 할 일"])
+                self.assertTrue(all(data["noOverflow"]))
+                self.assertTrue(all(data["noOverflowAfterPlain"]))
+                self.assertEqual(data["plain"]["dts"], ["봇", "현재 단계", "상태", "시작", "마지막 업데이트", "이벤트 수"])
+                self.assertEqual(data["plain"]["dds"], ["QA", "완료", "완료", "2026-11-18 09:00", "2026-11-18 11:00", "1개"])
+                self.assertFalse(data["plain"]["hasTitle"])
+                self.assertFalse(data["plain"]["hasWide"])
+                self.assertEqual(data["plain"]["heading"], "이벤트 이력")
+                self.assertTrue(data["plain"]["orderOk"])
+
+    def test_history_summary_search_hit_heading_and_highlight(self):
+        extra = """
+        snapshot.tasks = [
+          {task_id: "need-task", bot: "Engineering", title: "Plain Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T12:00:00+09:00", note: "needle note", next: "needle next",
+           events: [
+             {task_id: "need-task", bot: "Engineering", title: "Plain Title", stage: "코딩", note: "plain", next: "plain", ts: "2026-11-18T09:00:00+09:00"},
+             {task_id: "need-task", bot: "Engineering", title: "Plain Title", stage: "코딩", note: "needle note", next: "needle next", ts: "2026-11-18T12:00:00+09:00"}
+           ]},
+          {task_id: "summary-only", bot: "Engineering", title: "SummaryOnlyKeyword Title", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T11:00:00+09:00", note: "SummaryOnlyKeyword note", next: "plain",
+           events: [
+             {task_id: "summary-only", bot: "Engineering", title: "Plain Title", stage: "코딩", note: "plain", next: "plain", ts: "2026-11-18T11:00:00+09:00"}
+           ]},
+          {task_id: "plain-task", bot: "Engineering", title: "Plain", stage: "코딩", status: "진행 중",
+           started: "2026-11-18T09:00:00+09:00", updated: "2026-11-18T10:00:00+09:00", note: "plain", next: "plain",
+           events: [{task_id: "plain-task", bot: "Engineering", title: "Plain", stage: "코딩", note: "plain", next: "plain", ts: "2026-11-18T10:00:00+09:00"}]}
+        ];
+        """
+        exercise = """
+            const table = document.querySelector(".tasks");
+            const searchEl = document.getElementById("search");
+            const applySearch = (query) => {
+              searchEl.value = query;
+              searchEl.dispatchEvent(new Event("input", {bubbles: true}));
+              searchEl.dispatchEvent(new KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true}));
+            };
+            const ids = () => [...document.querySelectorAll(".task-toggle")].map(node => node.dataset.taskId);
+            applySearch("needle");
+            observations.needleIds = ids();
+            const hist = document.querySelector(".history");
+            observations.heading = hist ? hist.querySelector("h2").textContent : null;
+            observations.summaryAfterH2 = hist ? hist.querySelector("h2").nextElementSibling.classList.contains("history-summary") : null;
+            observations.tableAfterSummary = hist ? hist.querySelector(".history-summary").nextElementSibling.tagName : null;
+            observations.summaryMarks = hist ? [...hist.querySelector(".history-summary").querySelectorAll("mark")].map(node => node.textContent) : [];
+            observations.summaryText = hist ? hist.querySelector(".history-summary").textContent : null;
+            observations.histHeaders = hist ? [...hist.querySelector("table").tHead.rows[0].cells].map(th => th.textContent) : [];
+            observations.noOverflow = [document.documentElement.scrollWidth <= window.innerWidth,
+              document.body.scrollWidth <= window.innerWidth];
+            applySearch("SummaryOnlyKeyword");
+            observations.summaryOnlyIds = ids();
+            observations.summaryOnlyEmpty = document.querySelector("td.empty") ? document.querySelector("td.empty").textContent : null;
+            applySearch("");
+            observations.clearedIds = ids();
+            const toggle = [...document.querySelectorAll(".task-toggle")].find(node => node.dataset.taskId === "need-task");
+            toggle.click();
+            const full = document.querySelector(".history");
+            observations.fullHeading = full ? full.querySelector("h2").textContent : null;
+            observations.fullSummaryAfterH2 = full ? full.querySelector("h2").nextElementSibling.classList.contains("history-summary") : null;
+            observations.fullMarks = full ? full.querySelector(".history-summary").querySelectorAll("mark").length : -1;
+            applySearch("Engineering");
+            observations.engIds = ids();
+            const engHist = document.querySelector(".history");
+            observations.engSummaryMarks = engHist ? [...engHist.querySelector(".history-summary").querySelectorAll("mark")].map(node => node.textContent) : [];
+        """
+        for width in (1280, 390):
+            with self.subTest(width=width):
+                data = self.observe_page(exercise, width, extra_setup=extra)
+                self.assertEqual(data["needleIds"], ["need-task"])
+                self.assertEqual(data["heading"], "일치한 이벤트 1개 (전체 2개)")
+                self.assertTrue(data["summaryAfterH2"])
+                self.assertEqual(data["tableAfterSummary"], "TABLE")
+                self.assertIn("needle", data["summaryMarks"])
+                self.assertIn("needle note", data["summaryText"])
+                self.assertEqual(data["histHeaders"], ["시각", "단계", "메모", "다음 할 일"])
+                self.assertTrue(all(data["noOverflow"]))
+                # 요약만으로 매칭하면 안 된다: 검색 대상은 events만이다.
+                self.assertEqual(data["summaryOnlyIds"], [])
+                self.assertEqual(data["summaryOnlyEmpty"], "일치하는 이벤트가 없습니다.")
+                self.assertEqual(data["clearedIds"], ["need-task", "plain-task", "summary-only"])
+                self.assertEqual(data["fullHeading"], "이벤트 이력")
+                self.assertTrue(data["fullSummaryAfterH2"])
+                self.assertEqual(data["fullMarks"], 0)
+                self.assertEqual(data["engIds"], ["need-task", "plain-task", "summary-only"])
+                self.assertIn("Engineering", data["engSummaryMarks"])
+
+
 class MobileStaticTests(unittest.TestCase):
     def test_viewport_meta(self):
         self.assertIn("width=device-width", server.PAGE)
