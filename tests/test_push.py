@@ -2,6 +2,9 @@ import importlib.util
 import io
 import json
 import os
+import shutil
+import ssl
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -57,6 +60,50 @@ def serve(handler):
         finally:
             server.shutdown()
             thread.join()
+
+
+@contextmanager
+def serve_tls(handler, cert_file, key_file, sni=None):
+    server = HTTPServer(("127.0.0.1", 0), handler)
+    # 핸드셰이크 실패가 테스트 stderr를 오염시키지 않게 한다.
+    def _silence(*args, **kwargs):
+        pass
+
+    server.handle_error = _silence
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
+    if sni is not None and hasattr(ctx, "sni_callback"):
+        def _sni_callback(sock, server_name, sctx):
+            sni.append(server_name)
+
+        try:
+            ctx.sni_callback = _sni_callback
+        except Exception:
+            pass
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
+    thread.start()
+    try:
+        yield server
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+def _generate_cert(cert_dir, hostname):
+    cert = cert_dir / "cert.pem"
+    key = cert_dir / "key.pem"
+    subprocess.run(
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(key), "-out", str(cert), "-days", "1",
+            "-subj", f"/CN={hostname}",
+            "-addext", f"subjectAltName=DNS:{hostname}",
+        ],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    return cert, key
 
 
 class PushTests(unittest.TestCase):
@@ -151,7 +198,7 @@ class PushTests(unittest.TestCase):
                 upload = http.call_args.args[0]
                 self.assertEqual(
                     upload.full_url,
-                    "http://task-dashboard-dev.velar-agent.duckdns.org/api/ingest",
+                    "https://task-dashboard-dev.velar-agent.duckdns.org/api/ingest",
                 )
                 self.assertEqual(upload.get_header("Authorization"), "Bearer google-fixture")
                 self.assertEqual(upload.data, body)
@@ -180,11 +227,9 @@ class PushTests(unittest.TestCase):
             with patch.object(push, "request_body", return_value=body) as http:
                 self.assertEqual(push.main(["--target", "google-dev"]), 0)
                 upload = http.call_args.args[0]
-                self.assertEqual(upload.full_url, "http://192.0.2.99/api/ingest")
-                self.assertEqual(
-                    upload.get_header("Host"),
-                    "task-dashboard-dev.velar-agent.duckdns.org",
-                )
+                self.assertEqual(upload.full_url, "https://task-dashboard-dev.velar-agent.duckdns.org/api/ingest")
+                self.assertEqual(getattr(upload, "_connect_ip", None), "192.0.2.99")
+                self.assertEqual(getattr(upload, "_connect_port", None), 443)
                 self.assertEqual(upload.get_header("Authorization"), "Bearer google-fixture")
 
     def test_google_dev_connect_ip_live_host_header(self):
@@ -216,7 +261,7 @@ class PushTests(unittest.TestCase):
                 upload = http.call_args.args[0]
                 self.assertEqual(
                     upload.full_url,
-                    "http://task-dashboard.velar-agent.duckdns.org/api/ingest",
+                    "https://task-dashboard.velar-agent.duckdns.org/api/ingest",
                 )
                 self.assertEqual(upload.get_header("Authorization"), "Bearer " + "google-prod-fixture")
                 self.assertEqual(upload.data, body)
@@ -242,11 +287,9 @@ class PushTests(unittest.TestCase):
             with patch.object(push, "request_body", return_value=body) as http:
                 self.assertEqual(push.main(["--target", "google-prod"]), 0)
                 upload = http.call_args.args[0]
-                self.assertEqual(upload.full_url, "http://192.0.2.99/api/ingest")
-                self.assertEqual(
-                    upload.get_header("Host"),
-                    "task-dashboard.velar-agent.duckdns.org",
-                )
+                self.assertEqual(upload.full_url, "https://task-dashboard.velar-agent.duckdns.org/api/ingest")
+                self.assertEqual(getattr(upload, "_connect_ip", None), "192.0.2.99")
+                self.assertEqual(getattr(upload, "_connect_port", None), 443)
                 self.assertEqual(upload.get_header("Authorization"), "Bearer " + "google-prod-fixture")
 
     def test_google_prod_connect_ip_live_host_header(self):
@@ -274,8 +317,8 @@ class PushTests(unittest.TestCase):
             with patch.object(push, "request_body", return_value=body) as http:
                 self.assertEqual(push.main(["--target", "google-dev"]), 0)
                 upload = http.call_args.args[0]
-                self.assertEqual(upload.full_url, "http://203.0.113.10/api/ingest")
-                self.assertEqual(upload.get_header("Host"), "task-dashboard-dev.velar-agent.duckdns.org")
+                self.assertEqual(upload.full_url, "https://task-dashboard-dev.velar-agent.duckdns.org/api/ingest")
+                self.assertEqual(getattr(upload, "_connect_ip", None), "203.0.113.10")
                 self.assertEqual(upload.get_header("Authorization"), "Bearer " + "google-fixture")
 
     def test_google_dev_connect_ip_ipv6_rewrites_host(self):
@@ -288,8 +331,8 @@ class PushTests(unittest.TestCase):
             with patch.object(push, "request_body", return_value=body) as http:
                 self.assertEqual(push.main(["--target", "google-dev"]), 0)
                 upload = http.call_args.args[0]
-                self.assertEqual(upload.full_url, "http://[2001:db8::1]/api/ingest")
-                self.assertEqual(upload.get_header("Host"), "task-dashboard-dev.velar-agent.duckdns.org")
+                self.assertEqual(upload.full_url, "https://task-dashboard-dev.velar-agent.duckdns.org/api/ingest")
+                self.assertEqual(getattr(upload, "_connect_ip", None), "2001:db8::1")
                 self.assertEqual(upload.get_header("Authorization"), "Bearer " + "google-fixture")
 
     def test_google_dev_connect_ip_with_port_is_rejected(self):
@@ -366,3 +409,81 @@ class PushTests(unittest.TestCase):
         sleep.assert_called_once_with(2)
         self.assertEqual(len(self.worker.puts), 2)
 
+
+    def test_default_https_connect_ip_keeps_hostname_url_and_carries_pin(self):
+        config = self.google_dev_state.parent / ".config" / "task-dashboard"
+        config.mkdir(parents=True)
+        (config / "ingest-key-google-dev").write_text("google-fixture", encoding="ascii")
+        with patch.dict(os.environ, {"HOME": str(self.google_dev_state.parent), "CONNECT_IP": "192.0.2.99"}):
+            del os.environ["KEY_FILE"], os.environ["WORKER_URL"]
+            body = json.dumps(self.source.snapshot).encode()
+            with patch.object(push, "request_body", return_value=body) as http:
+                self.assertEqual(push.main(["--target", "google-dev"]), 0)
+                upload = http.call_args.args[0]
+                self.assertEqual(upload.full_url, "https://task-dashboard-dev.velar-agent.duckdns.org/api/ingest")
+                self.assertNotIn("192.0.2.99", upload.full_url)
+                self.assertEqual(getattr(upload, "_connect_ip", None), "192.0.2.99")
+                self.assertEqual(getattr(upload, "_connect_port", None), 443)
+
+    def test_non_https_non_loopback_worker_url_is_rejected(self):
+        body = json.dumps(self.source.snapshot).encode()
+        with patch.dict(os.environ, {"WORKER_URL": "http://task-dashboard-dev.velar-agent.duckdns.org/", "CONNECT_IP": ""}):
+            with patch.object(push, "request_body", return_value=body) as http:
+                with self.assertRaises(push.PushError) as ctx:
+                    push.push_once(True, "google-dev")
+                message = str(ctx.exception)
+                self.assertIn("https://", message)
+                self.assertNotIn(self.key, message)
+                self.assertEqual(http.call_count, 1)
+                self.assertFalse(self.google_dev_state.exists())
+        with patch.dict(os.environ, {"WORKER_URL": "http://task-dashboard.velar-agent.duckdns.org/", "CONNECT_IP": ""}):
+            with patch.object(push, "request_body", return_value=body) as http:
+                self.assertEqual(push.main(["--target", "google-prod"]), 1)
+                self.assertIn("https://", self.stderr.getvalue())
+                self.assertNotIn(self.key, self.stderr.getvalue())
+                self.assertEqual(http.call_count, 1)
+                self.assertFalse(self.google_prod_state.exists())
+
+    def test_https_connect_ip_tls_pinned_success(self):
+        if shutil.which("openssl") is None:
+            self.skipTest("openssl 없음")
+        hostname = "task-dashboard-dev.velar-agent.duckdns.org"
+        cert_dir = self.google_dev_state.parent / "tls-good"
+        cert_dir.mkdir()
+        cert, key = _generate_cert(cert_dir, hostname)
+        sni = []
+        with serve_tls(FakeWorker, cert, key, sni=sni) as tls_worker:
+            tls_worker.status = 200
+            tls_worker.puts = []
+            port = tls_worker.server_port
+            worker_url = f"https://{hostname}:{port}/"
+            with patch.dict(os.environ, {"WORKER_URL": worker_url, "CONNECT_IP": "127.0.0.1", "SSL_CERT_FILE": str(cert)}):
+                self.assertEqual(push.main(["--target", "google-dev"]), 0)
+            self.assertEqual(len(tls_worker.puts), 1)
+            path, headers, seen_body = tls_worker.puts[0]
+            self.assertEqual(path, "/api/ingest")
+            self.assertEqual(headers["Authorization"], "Bearer " + self.key)
+            self.assertEqual(headers["Host"], f"{hostname}:{port}")
+            self.assertIn(hostname, sni)
+            self.assertEqual(seen_body, self.source.snapshot)
+            self.assertTrue(self.google_dev_state.exists())
+
+    def test_https_connect_ip_tls_hostname_mismatch_fails(self):
+        if shutil.which("openssl") is None:
+            self.skipTest("openssl 없음")
+        hostname = "task-dashboard-dev.velar-agent.duckdns.org"
+        wrong = "wrong-host.invalid"
+        cert_dir = self.google_dev_state.parent / "tls-wrong"
+        cert_dir.mkdir()
+        cert, key = _generate_cert(cert_dir, wrong)
+        with serve_tls(FakeWorker, cert, key) as tls_worker:
+            tls_worker.status = 200
+            tls_worker.puts = []
+            port = tls_worker.server_port
+            worker_url = f"https://{hostname}:{port}/"
+            with patch.dict(os.environ, {"WORKER_URL": worker_url, "CONNECT_IP": "127.0.0.1", "SSL_CERT_FILE": str(cert)}):
+                self.assertEqual(push.main(["--target", "google-dev"]), 1)
+            self.assertIn("스냅샷 푸시 실패", self.stderr.getvalue())
+            self.assertNotIn(self.key, self.stderr.getvalue())
+            self.assertEqual(tls_worker.puts, [])
+            self.assertFalse(self.google_dev_state.exists())

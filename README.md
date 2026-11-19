@@ -38,14 +38,14 @@ python3 server.py
 
 ## 구글 VM(duckdns) dev+prod
 
-구글 VM(Ubuntu 24.04, python3.12, 메모리 1GB, rg 없음)에서 task-dashboard를 nginx 뒤에 두고 dev와 prod 두 서비스를 `http://...` (포트 80, HTTPS 없음)로 서비스합니다. VM 서버는 파이썬 표준 라이브러리만으로 동일한 API를 제공합니다. nginx는 `/etc/nginx/sites-available/task-dashboard` 한 파일에 `server_name`이 다른 server 블록 두 개를 두고, 둘 다 80번으로 받아 `127.0.0.1:8790`(dev)과 `127.0.0.1:8791`(prod)로 프록시합니다. `default_server`는 쓰지 않으며 `usage-dashboard` 파일은 참조하지 않습니다.
+구글 VM(Ubuntu 24.04, python3.12, 메모리 1GB, rg 없음)에서 task-dashboard를 nginx 뒤에 두고 dev와 prod 두 서비스를 `https://...` (443, Let's Encrypt)로 서비스합니다. VM 서버는 파이썬 표준 라이브러리만으로 동일한 API를 제공합니다. nginx는 `/etc/nginx/sites-available/task-dashboard` 한 파일에 `server_name`이 다른 server 블록 두 개를 두고, 둘 다 80번으로 받아 `127.0.0.1:8790`(dev)과 `127.0.0.1:8791`(prod)로 프록시합니다. 443(TLS) 설정은 Engineering이 관리하는 별도 파일 `/etc/nginx/sites-available/task-dashboard-https`에 두며(Let's Encrypt), 최종 상태에서 80번은 443으로 301 리다이렉트합니다(리다이렉트 적용은 별도 단계). `default_server`는 쓰지 않으며 `usage-dashboard` 파일은 참조하지 않습니다.
 
 ### 구조와 포트
 
 - `vm/server.py`: 표준 라이브러리 전용 서버. 같은 저장소의 `server.py`에서 `PAGE`를 import 해 동일 화면을 서빙하며 `ThreadingHTTPServer`로 `HOST`(기본 `127.0.0.1`) `PORT`(유닛에서 주입)에 뜨고, 스냅샷은 `DATA_FILE` 한 파일에 임시파일+`os.replace`로 원자 저장합니다.
 - `vm/task-dashboard-dev.service`: dev 유닛(`User=collector`, `WorkingDirectory=/workspace/task-dashboard-dev`). `EnvironmentFile=/home/collector/.config/task-dashboard-dev/env`로 `INGEST_KEY`를 읽고 `HOST=127.0.0.1` `PORT=8790` `DATA_FILE=/var/lib/task-dashboard-dev/snapshot.json` `PYTHONDONTWRITEBYTECODE=1`, `StateDirectory=task-dashboard-dev`, `ExecStart=/usr/bin/python3 vm/server.py`, `Restart=always`로 재부팅 후에도 자동 시작합니다.
 - `vm/task-dashboard.service`: prod 유닛(`User=collector`, `WorkingDirectory=/workspace/task-dashboard`). `EnvironmentFile=/home/collector/.config/task-dashboard/env`, `HOST=127.0.0.1` `PORT=8791` `DATA_FILE=/var/lib/task-dashboard/snapshot.json` `PYTHONDONTWRITEBYTECODE=1`, `StateDirectory=task-dashboard`, `ExecStart=/usr/bin/python3 vm/server.py`로 dev와 경로·환경파일·`StateDirectory`·데이터 파일·포트를 분리합니다. 두 서비스는 서로 다른 `INGEST_KEY`, 별도 코드 체크아웃, 별도 데이터 파일을 씁니다. `8787`/`8788`은 쓰지 않습니다.
-- `vm/nginx-task-dashboard.conf`: `server_name task-dashboard-dev.velar-agent.duckdns.org`와 `server_name task-dashboard.velar-agent.duckdns.org` 두 server 블록. 둘 다 `listen 80;`, `listen [::]:80;`, `client_max_body_size 1m;`, `proxy_set_header Host $host;`, `proxy_set_header X-Forwarded-For $remote_addr;`, `proxy_set_header X-Forwarded-Proto http;`, `proxy_read_timeout 30s;`를 가지며 각각 `proxy_pass http://127.0.0.1:8790;`과 `proxy_pass http://127.0.0.1:8791;`로 보냅니다. `default_server`는 없습니다.
+- `vm/nginx-task-dashboard.conf`: `server_name task-dashboard-dev.velar-agent.duckdns.org`와 `server_name task-dashboard.velar-agent.duckdns.org` 두 server 블록. 둘 다 `listen 80;`, `listen [::]:80;`, `client_max_body_size 1m;`, `proxy_set_header Host $host;`, `proxy_set_header X-Forwarded-For $remote_addr;`, `proxy_set_header X-Forwarded-Proto http;`, `proxy_read_timeout 30s;`를 가지며 각각 `proxy_pass http://127.0.0.1:8790;`과 `proxy_pass http://127.0.0.1:8791;`로 보냅니다. `default_server`는 없습니다. 443(TLS) 설정은 Engineering이 관리하는 별도 파일 `/etc/nginx/sites-available/task-dashboard-https`(Let's Encrypt)에 두며, 최종 상태에서 80번은 443으로 301 리다이렉트합니다(리다이렉트 적용은 별도 단계).
 - `vm/install.sh`: collector로 실행하는 idempotent 설치. 인자 `dev` 또는 `prod`(필수)를 받아 스크립트가 있는 저장소 루트가 기대 경로와 맞는지 확인한 뒤 해당 유닛만 설치/재시작하고, nginx 공유 파일 하나를 설치합니다. sudo는 유닛과 nginx 설치에만 씁니다.
 - `vm/deploy.sh`: box에서 실행하는 배포 헬퍼.
 - `vm/promote.sh`: VM의 collector가 cron으로 실행하는 dev→prod 승격 러너.
@@ -53,7 +53,7 @@ python3 server.py
 
 | 항목 | dev | prod |
 | --- | --- | --- |
-| 공개 주소 | `http://task-dashboard-dev.velar-agent.duckdns.org` (80, HTTPS 없음) | `http://task-dashboard.velar-agent.duckdns.org` (80, HTTPS 없음) |
+| 공개 주소 | `https://task-dashboard-dev.velar-agent.duckdns.org` (443, Let's Encrypt) | `https://task-dashboard.velar-agent.duckdns.org` (443, Let's Encrypt) |
 | VM 내 서버 | `127.0.0.1:8790` | `127.0.0.1:8791` |
 | systemd 유닛 | `task-dashboard-dev` | `task-dashboard` |
 | 체크아웃 | `/workspace/task-dashboard-dev` | `/workspace/task-dashboard` |
@@ -162,15 +162,15 @@ box에서 계속 동기화하려면 푸시 스크립트의 google-dev/google-pro
 ./deploy/push-to-worker.py --target google-prod --loop 15
 ```
 
-박스 DNS가 가짜 `198.18.x`를 돌려주면 `CONNECT_IP`에 실제 VM IP를 넣어 그 IP로 접속하고 `Host` 헤더는 원래 호스트로 보냅니다.
+박스 DNS가 가짜 `198.18.x`를 돌려주면 `CONNECT_IP`에 실제 VM IP를 넣어 그 IP로 TCP 연결을 고정하고, SNI와 인증서 검증, `Host` 헤더는 원래 호스트명으로 보냅니다(대상은 HTTPS이며 인증서를 검증합니다).
 
 ```sh
 CONNECT_IP=203.0.113.10 ./deploy/push-to-worker.py --target google-dev --loop 15
 CONNECT_IP=203.0.113.10 ./deploy/push-to-worker.py --target google-prod --loop 15
 # 또는 WORKER_URL 재지정:
-# CONNECT_IP=203.0.113.10 WORKER_URL=http://task-dashboard-dev.velar-agent.duckdns.org \
+# CONNECT_IP=203.0.113.10 WORKER_URL=https://task-dashboard-dev.velar-agent.duckdns.org \
 #   ./deploy/push-to-worker.py --target google-dev --loop 15
-# CONNECT_IP=203.0.113.10 WORKER_URL=http://task-dashboard.velar-agent.duckdns.org \
+# CONNECT_IP=203.0.113.10 WORKER_URL=https://task-dashboard.velar-agent.duckdns.org \
 #   ./deploy/push-to-worker.py --target google-prod --loop 15
 ```
 
@@ -181,9 +181,9 @@ CONNECT_IP=203.0.113.10 ./deploy/push-to-worker.py --target google-prod --loop 1
 /workspace/task-dashboard/deploy/box-start.sh
 ```
 
-### HTTPS 없음 / 평문 HTTP 키 경고
+### HTTPS 전송
 
-이 환경은 HTTPS가 없고 평문 HTTP(`http://...`)로 Bearer 키를 전송합니다. 네트워크 감청 시 키가 노출될 수 있습니다. VM의 nginx 80번과 box의 푸시 구간 모두 암호화되지 않습니다. 공용 네트워크에서는 쓰지 마세요.
+google-dev/google-prod 대상은 HTTPS(`https://...`)로 전송하고 서버 인증서를 검증합니다. `CONNECT_IP`가 있으면 TCP 연결만 해당 IP로 고정하고, SNI와 인증서 검증, `Host` 헤더는 원래 호스트명을 씁니다. VM의 443(TLS) 설정은 Engineering이 관리하는 별도 파일 `/etc/nginx/sites-available/task-dashboard-https`(Let's Encrypt)에 두며, 최종 상태에서 80번은 443으로 301 리다이렉트합니다(리다이렉트 적용은 별도 단계).
 
 ## 테스트
 
